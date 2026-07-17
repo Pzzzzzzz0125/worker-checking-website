@@ -5,6 +5,8 @@ const state = {
   dailyDirty: false,
   payroll: null,
   locationDetail: null,
+  aiReview: [],
+  aiWarnings: [],
   workerMonth: null,
   activeImport: null,
   conflicts: []
@@ -42,6 +44,99 @@ function number(value, digits = 1) {
     minimumFractionDigits: Number.isInteger(numeric) ? 0 : digits,
     maximumFractionDigits: digits
   });
+}
+
+function compactNumber(value) {
+  return Number(value || 0).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function parseNormalizedLocations(value) {
+  const raw = String(value || "");
+  const overtimeMatch = raw.match(/(?:^|,)\s*(?:ot|overtime)\s*(\d+(?:\.\d+)?)\s*h?/i);
+  const extraMatch = raw.match(/(?:^|,)\s*(?:ex|extra)\s*\$?\s*(\d+(?:\.\d+)?)/i);
+  const locationText = raw
+    .replace(/(?:^|,)\s*(?:ot|overtime)\s*\d+(?:\.\d+)?\s*h?/ig, "")
+    .replace(/(?:^|,)\s*(?:ex|extra)\s*\$?\s*\d+(?:\.\d+)?/ig, "")
+    .replace(/^\s*,|,\s*$/g, "")
+    .trim();
+  const locations = locationText.split(";").map(part => part.trim()).filter(Boolean).map(part => {
+    const match = part.match(/^(.*?)\(\s*(\d+(?:\.\d+)?)\s*(?:h(?:ou)?r?s?)?\s*\)$/i);
+    return match
+      ? { name: match[1].trim(), hours: Number(match[2]) }
+      : { name: part, hours: null };
+  }).filter(item => item.name);
+  const explicit = locations.filter(item => item.hours != null).length;
+  let error = explicit > 0 && explicit < locations.length
+    ? "Give hours for every location, or leave hours blank for every location."
+    : "";
+  if (!error && /[\/+]/.test(locationText)) {
+    error = "Use a semicolon (;) between locations; slash and plus are not location separators.";
+  }
+  if (!error && locationText.includes(",")) {
+    error = "Use semicolons between locations. Commas are reserved for OT and extra pay.";
+  }
+  return {
+    locations,
+    overtime_hours: overtimeMatch ? Number(overtimeMatch[1]) : null,
+    extra_pay: extraMatch ? Number(extraMatch[1]) : null,
+    error
+  };
+}
+
+function locationEditorValue(record) {
+  return (record.locations || []).map(item =>
+    `${item.name}${item.hours != null ? `(${compactNumber(item.hours)})` : ""}`
+  ).join(";");
+}
+
+function derivedOvertime(record) {
+  if (record.status !== "worked") return 0;
+  const locations = record.locations || [];
+  const explicit = locations.length && locations.every(item => item.hours != null);
+  const regular = explicit
+    ? locations.reduce((sum, item) => sum + Number(item.hours || 0), 0)
+    : Math.min(Number(record.total_hours || 0), 8);
+  return Math.max(Number(record.total_hours || 0) - regular, 0);
+}
+
+function normalizedWorkCell(record) {
+  if (record.status === "off") return "off";
+  if (record.status !== "worked" || !(record.locations || []).length) return "—";
+  const total = Number(record.total_hours || 0);
+  const locations = record.locations || [];
+  const explicit = locations.filter(item => item.hours != null).length;
+  if (explicit > 0 && explicit < locations.length) return "Fix the location-hour split";
+  let regular = 8;
+  let parts;
+  if (explicit === locations.length) {
+    regular = locations.reduce((sum, item) => sum + Number(item.hours || 0), 0);
+    parts = locations.map(item => `${item.name}(${compactNumber(item.hours)})`);
+  } else if (total < 8) {
+    regular = total;
+    const share = Math.round((regular / locations.length) * 100) / 100;
+    const allocations = locations.map((_, index) =>
+      index === locations.length - 1
+        ? Math.round((regular - share * (locations.length - 1)) * 100) / 100
+        : share
+    );
+    parts = locations.map((item, index) => `${item.name}(${compactNumber(allocations[index])})`);
+  } else {
+    parts = locations.map(item => item.name);
+  }
+  let value = parts.join(";");
+  const overtime = Math.max(total - regular, 0);
+  if (overtime) value += `, ot ${compactNumber(overtime)}h`;
+  if (Number(record.extra_pay || 0)) value += `, ex $${compactNumber(record.extra_pay)}`;
+  return value;
+}
+
+function locationValidationError(record) {
+  if (record.location_error) return record.location_error;
+  const locations = record.locations || [];
+  const explicit = locations.filter(item => item.hours != null).length;
+  return explicit > 0 && explicit < locations.length
+    ? "Give hours for every location, or leave hours blank for every location."
+    : "";
 }
 
 function costCenterDisplay(center) {
@@ -108,6 +203,7 @@ const viewMeta = {
   overview: ["WORKFORCE OVERVIEW", "Hours at a glance"],
   payroll: ["HALF-MONTH PAYROLL", "Payroll check"],
   locations: ["LOCATION HISTORY", "Location check"],
+  ai: ["GEMINI ASSISTED ENTRY", "AI text entry"],
   daily: ["DAILY WORK LOG", "Record a work day"],
   worker: ["WORKER MONTH LOG", "Worker entry"],
   transfer: ["WORKBOOK TOOLS", "Import & export"],
@@ -165,12 +261,17 @@ async function bootstrap() {
   $("#dailyDate").value = today;
   if (!$("#workerMonth").value) $("#workerMonth").value = today.slice(0, 7);
   $("#payrollMonth").value = today.slice(0, 7);
+  if (!$("#aiEntryYear").value) $("#aiEntryYear").value = today.slice(0, 4);
   if (!$("#locationFrom").value) $("#locationFrom").value = `${today.slice(0, 4)}-01-01`;
   if (!$("#locationTo").value) $("#locationTo").value = today;
   const currentHalf = Number(today.slice(8, 10)) <= 15 ? "1" : "2";
   $$("[data-half]").forEach(button => button.classList.toggle("active", button.dataset.half === currentHalf));
   $("#exportFrom").value = `${state.bootstrap.workbook_year}-01-01`;
   $("#exportTo").value = today;
+  updateAIAnalyzeState();
+  if (!state.bootstrap.ai_configured) {
+    $("#analyzeWithAI").title = "Gemini API key is not configured";
+  }
   setPreset("month");
   await loadSummary();
 }
@@ -389,6 +490,138 @@ function renderLocationDetail() {
   `).join("");
 }
 
+function splitReviewValues(value) {
+  return String(value || "").split(/\s*[;|]+\s*/).map(item => item.trim()).filter(Boolean);
+}
+
+async function analyzeAIText() {
+  const text = $("#aiSourceText").value.trim();
+  if (!text) {
+    toast("Paste work information first.", "error");
+    return;
+  }
+  if (!$("#aiConsent").checked) {
+    toast("Confirm the Gemini data-sharing notice before analyzing.", "error");
+    return;
+  }
+  const button = $("#analyzeWithAI");
+  setLoading(button, true);
+  button.textContent = "Gemini is reading…";
+  try {
+    const result = await api("/api/ai/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, year: Number($("#aiEntryYear").value), consent: true })
+    });
+    state.aiWarnings = result.warnings || [];
+    state.aiReview = result.records.map(record => ({
+      ...record,
+      locations: [...(record.locations || [])],
+      cost_centers: [...(record.cost_centers || [])],
+      cost_center_text: record.cost_center_text || (record.cost_centers || []).map(costCenterDisplay).join(" ; "),
+      selected: Boolean(record.ready && record.confidence !== "low"),
+      saved: false
+    }));
+    $("#aiReviewCard").hidden = false;
+    $("#aiReviewSummary").textContent = result.summary || `${state.aiReview.length} records extracted by Gemini.`;
+    renderAIReview();
+    $("#aiReviewCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setLoading(button, false);
+    button.textContent = "Analyze with Gemini";
+    updateAIAnalyzeState();
+  }
+}
+
+function updateAIAnalyzeState() {
+  if (!state.bootstrap) return;
+  $("#analyzeWithAI").disabled = !state.bootstrap.ai_configured || !$("#aiConsent").checked;
+}
+
+function renderAIReview() {
+  const warnings = state.aiWarnings.filter(Boolean);
+  $("#aiGlobalWarnings").hidden = !warnings.length;
+  $("#aiGlobalWarnings").innerHTML = warnings.map(item => `<p>${escapeHTML(item)}</p>`).join("");
+  $("#aiReviewList").innerHTML = state.aiReview.length ? state.aiReview.map((record, index) => {
+    const issues = record.issues || [];
+    const confidence = record.confidence || "low";
+    return `
+      <article class="ai-review-item ${record.saved ? "saved" : ""} ${issues.length ? "has-issues" : ""}" data-ai-index="${index}">
+        <div class="ai-review-top">
+          <label class="ai-record-check"><input type="checkbox" data-ai-select ${record.selected ? "checked" : ""} ${record.saved ? "disabled" : ""}><span>${record.saved ? "Saved" : "Include"}</span></label>
+          <div class="ai-source"><small>Source</small><span>${escapeHTML(record.source_excerpt || "No source excerpt")}</span></div>
+          <span class="confidence-badge ${confidence}">${escapeHTML(confidence)} confidence</span>
+          ${record.existing ? `<span class="existing-badge">Updates existing day</span>` : ""}
+        </div>
+        <div class="ai-fields-grid">
+          <label class="field"><span>Date</span><input type="date" data-ai-field="date" value="${escapeHTML(record.date)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Worker</span><input type="search" data-ai-field="worker_name" list="workerSuggestions" value="${escapeHTML(record.worker_name)}" autocomplete="off" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Status</span><select data-ai-field="status" ${record.saved ? "disabled" : ""}><option value="worked" ${record.status === "worked" ? "selected" : ""}>Worked</option><option value="off" ${record.status === "off" ? "selected" : ""}>Off</option></select></label>
+          <label class="field ai-location-field"><span>Location(s) · separate with ;</span><input data-ai-field="locations" value="${escapeHTML(record.locations.join(" ; "))}" placeholder="444 Pocatello ; 111 Main St" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Total hours</span><input type="number" min="0" max="24" step=".25" data-ai-field="total_hours" value="${number(record.total_hours, 2)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Overtime</span><input type="number" min="0" max="16" step=".25" data-ai-field="overtime_hours" value="${number(record.overtime_hours, 2)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Extra $</span><input type="number" min="0" step="1" data-ai-field="extra_pay" value="${number(record.extra_pay, 2)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>Start</span><input type="time" data-ai-field="start_time" value="${escapeHTML(record.start_time)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field"><span>End</span><input type="time" data-ai-field="end_time" value="${escapeHTML(record.end_time)}" ${record.saved ? "disabled" : ""}></label>
+          <label class="field ai-cost-field"><span>Cost center(s) · separate with ;</span><input data-ai-field="cost_center_text" list="costCenterSuggestions" value="${escapeHTML(record.cost_center_text)}" placeholder="Optional" ${record.saved ? "disabled" : ""}></label>
+          <label class="field ai-notes-field"><span>Notes</span><input data-ai-field="notes" value="${escapeHTML(record.notes)}" placeholder="Optional" ${record.saved ? "disabled" : ""}></label>
+        </div>
+        ${issues.length ? `<div class="ai-issues">${issues.map(issue => `<span>${escapeHTML(issue)}</span>`).join("")}</div>` : ""}
+      </article>`;
+  }).join("") : `<div class="empty-state"><h3>No records extracted</h3><p>Adjust the pasted text and analyze it again.</p></div>`;
+  updateAISelectionLabel();
+}
+
+function updateAISelectionLabel() {
+  const count = state.aiReview.filter(record => record.selected && !record.saved).length;
+  $("#aiSelectedLabel").textContent = count
+    ? `${count} selected ${count === 1 ? "record" : "records"} ready for confirmation`
+    : "No records selected";
+  $("#confirmAIRecords").disabled = count === 0;
+}
+
+async function confirmAIRecords() {
+  const selected = state.aiReview.filter(record => record.selected && !record.saved);
+  if (!selected.length) return;
+  const button = $("#confirmAIRecords");
+  setLoading(button, true);
+  try {
+    const records = selected.map(record => ({
+      worker_name: record.worker_name,
+      date: record.date,
+      status: record.status,
+      locations: record.locations,
+      regular_hours: record.regular_hours,
+      overtime_hours: record.overtime_hours,
+      total_hours: record.total_hours,
+      extra_pay: record.extra_pay,
+      start_time: record.start_time,
+      end_time: record.end_time,
+      cost_centers: splitReviewValues(record.cost_center_text),
+      notes: record.notes
+    }));
+    const result = await api("/api/ai/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records })
+    });
+    selected.forEach(record => {
+      record.saved = true;
+      record.selected = false;
+    });
+    renderAIReview();
+    toast(`Confirmed and saved ${result.saved} AI ${result.saved === 1 ? "record" : "records"}.`);
+    await bootstrap();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setLoading(button, false);
+    updateAISelectionLabel();
+  }
+}
+
 function stepPayrollMonth(amount) {
   const value = $("#payrollMonth").value || localISO().slice(0, 7);
   const [year, month] = value.split("-").map(Number);
@@ -437,6 +670,7 @@ function syncWorkerMonthDraft() {
     work_date: day.work_date,
     status: day.status,
     total_hours: day.total_hours,
+    overtime_hours: day.overtime_hours,
     extra_pay: day.extra_pay,
     start_time: day.start_time,
     end_time: day.end_time,
@@ -469,6 +703,7 @@ async function loadWorkerMonth() {
       end_time: day.end_time || "16:30",
       status: day.status || "worked",
       cost_centers: (day.cost_centers || []).map(center => ({ ...center })),
+      overtime_hours: derivedOvertime(day),
       dirty: false
     }));
     state.workerMonth = data;
@@ -480,6 +715,7 @@ async function loadWorkerMonth() {
           Object.assign(day, draft, { dirty: true });
           day.status = day.status || "worked";
           if (day.status === "worked") day.total_hours = day.total_hours || 8;
+          if (day.overtime_hours == null) day.overtime_hours = derivedOvertime(day);
         }
       });
     } catch {}
@@ -504,16 +740,17 @@ function renderWorkerMonth() {
     const worked = day.status === "worked";
     const weekday = new Date(`${day.work_date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" });
     const weekend = ["Sat", "Sun"].includes(weekday);
-    const location = (day.locations || []).map(item => item.name).join(" / ");
+    const location = locationEditorValue(day);
     return `
       <tr data-month-index="${index}" class="${weekend ? "weekend " : ""}${day.status === "off" ? "off-row" : ""}">
         <td class="date-label"><strong>${displayDate(day.work_date)}</strong><span>${weekday}</span></td>
         <td><select data-month-field="status"><option value="" ${!day.status ? "selected" : ""}>Not set</option><option value="worked" ${worked ? "selected" : ""}>Worked</option><option value="off" ${day.status === "off" ? "selected" : ""}>Off</option></select></td>
-        <td><input class="month-location" data-month-field="location" value="${escapeHTML(location)}" placeholder="Required location" ${worked ? "" : "disabled"}></td>
+        <td><input class="month-location" data-month-field="location" value="${escapeHTML(location)}" placeholder="444;111 or 432(3);1151(5)" title="Use semicolons between locations. Put optional hours in parentheses." ${worked ? "" : "disabled"}><code class="month-normalized">${escapeHTML(normalizedWorkCell(day))}</code></td>
         <td><input class="month-time" data-month-field="start_time" type="time" value="${escapeHTML(day.start_time)}" ${worked ? "" : "disabled"}></td>
         <td><input class="month-time" data-month-field="end_time" type="time" value="${escapeHTML(day.end_time)}" ${worked ? "" : "disabled"}></td>
         <td class="month-cost-center">${renderCostCenterPicker(day, "data-month-field", !worked)}</td>
-        <td><input class="month-number" data-month-field="total_hours" type="number" min="0" max="24" step=".5" value="${number(day.total_hours)}" ${worked ? "" : "disabled"}></td>
+        <td><input class="month-number" data-month-field="total_hours" type="number" min="0" max="24" step=".25" value="${number(day.total_hours, 2)}" ${worked ? "" : "disabled"}></td>
+        <td><input class="month-number" data-month-field="overtime_hours" type="number" min="0" max="16" step=".25" value="${number(day.overtime_hours, 2)}" ${worked ? "" : "disabled"}></td>
         <td><input class="month-number" data-month-field="extra_pay" type="number" min="0" step="1" value="${number(day.extra_pay)}" ${worked ? "" : "disabled"}></td>
         <td><button class="row-save" data-save-month-day ${day.dirty && day.status ? "" : "disabled"}>Save</button></td>
       </tr>`;
@@ -542,6 +779,11 @@ async function saveWorkerMonthDays(days, button) {
   const missing = ready.find(day => day.status === "worked" && !(day.locations || []).length);
   if (missing) {
     toast(`Enter a location for ${displayDate(missing.work_date)}.`, "error");
+    return;
+  }
+  const invalid = ready.find(day => locationValidationError(day));
+  if (invalid) {
+    toast(`${displayDate(invalid.work_date)}: ${locationValidationError(invalid)}`, "error");
     return;
   }
   if (!ready.length) return;
@@ -584,6 +826,7 @@ async function loadDaily() {
       worker_name: worker.worker_name,
       status: worker.status || "worked",
       total_hours: worker.total_hours ?? 8,
+      overtime_hours: derivedOvertime({ ...worker, status: worker.status || "worked", total_hours: worker.total_hours ?? 8 }),
       extra_pay: worker.extra_pay || 0,
       start_time: worker.start_time || "08:30",
       end_time: worker.end_time || "16:30",
@@ -601,6 +844,7 @@ async function loadDaily() {
         Object.assign(record, draft, { dirty: true });
         record.status = record.status || "worked";
         if (record.status === "worked") record.total_hours = record.total_hours || 8;
+        if (record.overtime_hours == null) record.overtime_hours = derivedOvertime(record);
       }
     });
     state.dailyDirty = state.daily.some(item => item.dirty);
@@ -613,7 +857,7 @@ async function loadDaily() {
 }
 
 function dailyLocation(record) {
-  return record.locations.map(item => item.name).join(" / ");
+  return locationEditorValue(record);
 }
 
 function dailyDraftKey(dateValue = $("#dailyDate").value) {
@@ -663,6 +907,7 @@ function syncDailyDraft() {
     worker_id: item.worker_id,
     status: item.status,
     total_hours: item.total_hours,
+    overtime_hours: item.overtime_hours,
     extra_pay: item.extra_pay,
     start_time: item.start_time,
     end_time: item.end_time,
@@ -697,7 +942,7 @@ function dailyRecordPayload(item) {
       ? recordCostCenters(item).map(center => ({ id: center.id, name: center.name }))
       : [],
     locations: item.status === "worked"
-      ? item.locations.map(location => ({ name: location.name, hours: null }))
+      ? item.locations.map(location => ({ name: location.name, hours: location.hours }))
       : [],
     notes: item.notes
   };
@@ -707,6 +952,7 @@ function dailyRecordSnapshot(item) {
   return {
     status: item.status,
     total_hours: item.total_hours,
+    overtime_hours: item.overtime_hours,
     extra_pay: item.extra_pay,
     start_time: item.start_time,
     end_time: item.end_time,
@@ -736,7 +982,7 @@ function renderDaily() {
           <button class="${record.status === "worked" ? "active worked" : ""}" data-status="worked">Worked</button>
           <button class="${record.status === "off" ? "active off" : ""}" data-status="off">Off</button>
         </div>
-        <label class="entry-field location-field"><span>Location *</span><input data-field="location" value="${escapeHTML(dailyLocation(record))}" placeholder="e.g. 444 / 111" ${disabled ? "disabled" : ""}></label>
+        <label class="entry-field location-field"><span>Location split *</span><input data-field="location" list="locationSuggestions" value="${escapeHTML(dailyLocation(record))}" placeholder="444;111 or 432(3);1151(5)" title="Use semicolons between locations. Put optional hours in parentheses." ${disabled ? "disabled" : ""}></label>
         <div class="entry-actions">
           <button class="row-save" data-save-worker ${record.dirty && record.status ? "" : "disabled"}>Save</button>
           <button class="row-copy" data-copy-worker>Copy</button>
@@ -747,9 +993,11 @@ function renderDaily() {
           <label class="entry-field"><span>Start time</span><input data-field="start_time" type="time" value="${escapeHTML(record.start_time)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field"><span>End time</span><input data-field="end_time" type="time" value="${escapeHTML(record.end_time)}" ${disabled ? "disabled" : ""}></label>
           <div class="entry-field kind-field"><span>Cost centers</span>${renderCostCenterPicker(record, "data-field", disabled)}</div>
-          <label class="entry-field"><span>Hours</span><input data-field="total_hours" type="number" min="0" max="24" step=".5" value="${number(record.total_hours)}" ${disabled ? "disabled" : ""}></label>
+          <label class="entry-field"><span>Total hours</span><input data-field="total_hours" type="number" min="0" max="24" step=".25" value="${number(record.total_hours, 2)}" ${disabled ? "disabled" : ""}></label>
+          <label class="entry-field"><span>OT hours</span><input data-field="overtime_hours" type="number" min="0" max="16" step=".25" value="${number(record.overtime_hours, 2)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field"><span>Extra $</span><input data-field="extra_pay" type="number" min="0" step="1" value="${number(record.extra_pay)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field notes-field"><span>Notes</span><input data-field="notes" value="${escapeHTML(record.notes)}" placeholder="Optional" ${disabled ? "disabled" : ""}></label>
+          <div class="normalized-preview"><span>Excel cell</span><code>${escapeHTML(normalizedWorkCell(record))}</code></div>
         </div>
       </article>`;
   }).join("") : `
@@ -783,6 +1031,11 @@ async function saveOneDaily(index, button) {
     toast(`Enter a location for ${record.worker_name}.`, "error");
     return;
   }
+  const locationError = locationValidationError(record);
+  if (locationError) {
+    toast(`${record.worker_name}: ${locationError}`, "error");
+    return;
+  }
   setLoading(button, true);
   try {
     await api("/api/day", {
@@ -810,6 +1063,11 @@ async function saveDaily() {
   const missing = records.find(item => item.status === "worked" && !dailyLocation(item).trim());
   if (missing) {
     toast(`Enter a location for ${missing.worker_name}.`, "error");
+    return;
+  }
+  const invalid = records.find(item => locationValidationError(item));
+  if (invalid) {
+    toast(`${invalid.worker_name}: ${locationValidationError(invalid)}`, "error");
     return;
   }
   const button = $("#saveDay");
@@ -1045,6 +1303,52 @@ function bindEvents() {
       loadLocationDetail();
     }
   });
+  $("#analyzeWithAI").addEventListener("click", analyzeAIText);
+  $("#aiConsent").addEventListener("change", updateAIAnalyzeState);
+  $("#selectReadyAI").addEventListener("click", () => {
+    state.aiReview.forEach(record => {
+      if (!record.saved) record.selected = Boolean(record.ready && record.confidence !== "low");
+    });
+    renderAIReview();
+  });
+  $("#clearAISelection").addEventListener("click", () => {
+    state.aiReview.forEach(record => { record.selected = false; });
+    renderAIReview();
+  });
+  $("#confirmAIRecords").addEventListener("click", confirmAIRecords);
+  $("#aiReviewList").addEventListener("change", event => {
+    const item = event.target.closest("[data-ai-index]");
+    if (!item) return;
+    const record = state.aiReview[Number(item.dataset.aiIndex)];
+    if (event.target.matches("[data-ai-select]")) {
+      record.selected = event.target.checked;
+      updateAISelectionLabel();
+    }
+  });
+  $("#aiReviewList").addEventListener("input", event => {
+    const item = event.target.closest("[data-ai-index]");
+    const field = event.target.dataset.aiField;
+    if (!item || !field) return;
+    const record = state.aiReview[Number(item.dataset.aiIndex)];
+    if (field === "locations") {
+      record.locations = splitReviewValues(event.target.value);
+    } else if (field === "total_hours" || field === "overtime_hours" || field === "extra_pay") {
+      record[field] = Number(event.target.value || 0);
+      if (field === "overtime_hours") {
+        record.regular_hours = record.regular_hours || 8;
+        record.total_hours = Math.max(record.total_hours || 0, record.regular_hours + record.overtime_hours);
+        const totalInput = item.querySelector('[data-ai-field="total_hours"]');
+        if (totalInput) totalInput.value = record.total_hours;
+      } else if (field === "total_hours") {
+        record.regular_hours = Math.min(record.total_hours, 8);
+        record.overtime_hours = Math.max(record.total_hours - 8, 0);
+        const overtimeInput = item.querySelector('[data-ai-field="overtime_hours"]');
+        if (overtimeInput) overtimeInput.value = record.overtime_hours;
+      }
+    } else {
+      record[field] = event.target.value;
+    }
+  });
   $("#loadWorkerMonth").addEventListener("click", loadWorkerMonth);
   $("#workerMonthSearch").addEventListener("keydown", event => {
     if (event.key === "Enter") {
@@ -1072,6 +1376,7 @@ function bindEvents() {
         day.end_time = day.end_time || "16:30";
       } else if (day.status === "off") {
         day.total_hours = 0;
+        day.overtime_hours = 0;
         day.extra_pay = 0;
         day.locations = [];
       }
@@ -1093,14 +1398,37 @@ function bindEvents() {
       return;
     }
     if (field === "location") {
-      day.locations = event.target.value.split(/\s*\/\s*|\s*,\s*/).filter(Boolean).map(name => ({ name, hours: null }));
+      const parsed = parseNormalizedLocations(event.target.value);
+      day.locations = parsed.locations;
+      day.location_error = parsed.error;
+      if (parsed.overtime_hours != null) day.overtime_hours = parsed.overtime_hours;
+      if (parsed.extra_pay != null) day.extra_pay = parsed.extra_pay;
+      const overtime = Number(day.overtime_hours || 0);
+      if (day.locations.length && day.locations.every(item => item.hours != null)) {
+        day.total_hours = day.locations.reduce((sum, item) => sum + Number(item.hours), 0) + overtime;
+      }
+    } else if (field === "overtime_hours") {
+      const regular = day.locations?.length && day.locations.every(item => item.hours != null)
+        ? day.locations.reduce((sum, item) => sum + Number(item.hours), 0)
+        : Math.min(Number(day.total_hours || 0), 8);
+      day.overtime_hours = Number(event.target.value || 0);
+      day.total_hours = regular + day.overtime_hours;
     } else if (field === "total_hours" || field === "extra_pay") {
       day[field] = Number(event.target.value || 0);
+      if (field === "total_hours") day.overtime_hours = derivedOvertime(day);
     } else {
       day[field] = event.target.value;
     }
+    const totalInput = row.querySelector('[data-month-field="total_hours"]');
+    const overtimeInput = row.querySelector('[data-month-field="overtime_hours"]');
+    const extraInput = row.querySelector('[data-month-field="extra_pay"]');
+    if (field !== "total_hours" && totalInput) totalInput.value = compactNumber(day.total_hours);
+    if (field !== "overtime_hours" && overtimeInput) overtimeInput.value = compactNumber(day.overtime_hours);
+    if (field !== "extra_pay" && extraInput) extraInput.value = compactNumber(day.extra_pay);
     day.dirty = true;
     row.querySelector("[data-save-month-day]").disabled = !day.status;
+    const preview = row.querySelector(".month-normalized");
+    if (preview) preview.textContent = normalizedWorkCell(day);
     syncWorkerMonthDraft();
   });
   $("#workerMonthBody").addEventListener("click", event => {
@@ -1132,6 +1460,7 @@ function bindEvents() {
       if (!item.existing) {
         item.status = "off";
         item.total_hours = 0;
+        item.overtime_hours = 0;
         item.locations = [];
         item.dirty = true;
       }
@@ -1169,6 +1498,7 @@ function bindEvents() {
       if (record.status === "worked" && !record.total_hours) record.total_hours = 8;
       if (record.status === "off") {
         record.total_hours = 0;
+        record.overtime_hours = 0;
         record.extra_pay = 0;
         record.locations = [];
       }
@@ -1181,6 +1511,7 @@ function bindEvents() {
       } else {
         record.status = "worked";
         record.total_hours = 8;
+        record.overtime_hours = 0;
         record.extra_pay = 0;
         record.start_time = "08:30";
         record.end_time = "16:30";
@@ -1205,16 +1536,39 @@ function bindEvents() {
       return;
     }
     if (field === "location") {
-      record.locations = event.target.value.split(/\s*\/\s*|\s*,\s*/).filter(Boolean).map(name => ({ name, hours: null }));
+      const parsed = parseNormalizedLocations(event.target.value);
+      record.locations = parsed.locations;
+      record.location_error = parsed.error;
+      if (parsed.overtime_hours != null) record.overtime_hours = parsed.overtime_hours;
+      if (parsed.extra_pay != null) record.extra_pay = parsed.extra_pay;
+      const overtime = Number(record.overtime_hours || 0);
+      if (record.locations.length && record.locations.every(item => item.hours != null)) {
+        record.total_hours = record.locations.reduce((sum, item) => sum + Number(item.hours), 0) + overtime;
+      }
+    } else if (field === "overtime_hours") {
+      const regular = record.locations?.length && record.locations.every(item => item.hours != null)
+        ? record.locations.reduce((sum, item) => sum + Number(item.hours), 0)
+        : Math.min(Number(record.total_hours || 0), 8);
+      record.overtime_hours = Number(event.target.value || 0);
+      record.total_hours = regular + record.overtime_hours;
     } else if (field === "total_hours" || field === "extra_pay") {
       record[field] = Number(event.target.value || 0);
+      if (field === "total_hours") record.overtime_hours = derivedOvertime(record);
     } else {
       record[field] = event.target.value;
     }
+    const totalInput = card.querySelector('[data-field="total_hours"]');
+    const overtimeInput = card.querySelector('[data-field="overtime_hours"]');
+    const extraInput = card.querySelector('[data-field="extra_pay"]');
+    if (field !== "total_hours" && totalInput) totalInput.value = compactNumber(record.total_hours);
+    if (field !== "overtime_hours" && overtimeInput) overtimeInput.value = compactNumber(record.overtime_hours);
+    if (field !== "extra_pay" && extraInput) extraInput.value = compactNumber(record.extra_pay);
     card.querySelector("[data-save-worker]").disabled = !record.status;
+    const preview = card.querySelector(".normalized-preview code");
+    if (preview) preview.textContent = normalizedWorkCell(record);
     markRecordDirty(record);
   });
-  $("#addWorkerSidebar").addEventListener("click", () => $("#workerDialog").showModal());
+  $("#addWorkerSidebar")?.addEventListener("click", () => $("#workerDialog").showModal());
   $("#workerForm").addEventListener("submit", addWorker);
   $$("[data-close-dialog]").forEach(button => button.addEventListener("click", () => $("#workerDialog").close()));
 

@@ -3,17 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Speed Construction Worker Schedule</title>
+  <title>Speed Construction · Checking</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#" aria-label="Speed Construction Worker Schedule home">
-        <span class="brand-mark">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h10a2 2 0 0 1 2 2v15H5v-15a2 2 0 0 1 2-2Z"/><path d="M9 3.5v-1h6v1M8.5 9h7M8.5 13h7M8.5 17h4"/></svg>
-        </span>
-        <span class="brand-copy"><strong>Speed Construction</strong><small>Worker Schedule</small></span>
+        <img class="company-logo" src="/assets/speed-construction-logo.png" alt="Speed Construction">
+        <small>Worker Schedule</small>
       </a>
 
       <nav class="main-nav" aria-label="Main navigation">
@@ -29,14 +27,10 @@
           <svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
           Location check
         </button>
-        <button class="nav-item" data-view="daily">
+        <a class="nav-item logger-nav" href="/log">
           <svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="m8 15 2 2 5-5"/></svg>
-          Daily entry
-        </button>
-        <button class="nav-item" data-view="worker">
-          <svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 8h4M19 6v4"/></svg>
-          Worker entry
-        </button>
+          Open logging site
+        </a>
         <button class="nav-item" data-view="transfer">
           <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 13v7h14v-7"/></svg>
           Import & export
@@ -52,12 +46,8 @@
         <p class="developer-credit">Developed by<br><strong>Zihao (Paul) Zhao</strong></p>
         <div class="system-status">
           <span class="status-dot"></span>
-          <span><strong>Stored locally</strong><small>SQLite database</small></span>
+          <span><strong>Checking site</strong><small>Shared schedule data</small></span>
         </div>
-        <button class="ghost-button compact" id="addWorkerSidebar">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          Add worker
-        </button>
       </div>
     </aside>
 
@@ -72,10 +62,10 @@
         </div>
         <div class="top-actions">
           <span class="last-sync"><span class="status-dot"></span><span>Data through <strong id="lastRecorded">—</strong></span></span>
-          <button class="primary-button" data-go="daily">
+          <a class="primary-button top-log-link" href="/log">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
             Record today
-          </button>
+          </a>
         </div>
       </header>
 
@@ -148,7 +138,7 @@
                 <div><i class="off"></i><span>Off</span><strong id="snapshotOff">0 days</strong></div>
               </div>
             </div>
-            <button class="text-button" data-go="daily">Open daily entry <span>→</span></button>
+            <a class="text-button" href="/log">Open logging site <span>→</span></a>
           </article>
         </div>
 
@@ -272,6 +262,49 @@
         </article>
       </section>
 
+      <section class="view" id="aiView">
+        <div class="ai-entry-grid">
+          <article class="card ai-compose-card">
+            <div class="ai-heading">
+              <div class="feature-icon ai"><svg viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg></div>
+              <div><p class="kicker">GEMINI ASSISTED ENTRY</p><h2>Paste work information</h2><p>Gemini will identify workers, dates, locations, hours, overtime, and any stated cost centers.</p></div>
+            </div>
+            <label class="field ai-text-field"><span>Work information</span><textarea id="aiSourceText" maxlength="50000" placeholder="Example:&#10;07/01 Cristian and Eduardo&#10;16970 Cypress Way&#10;&#10;07/02 Cristian and Eduardo 1049 Woodland Ave"></textarea></label>
+            <label class="ai-consent"><input type="checkbox" id="aiConsent"><span>I understand that the pasted text will be sent to Google Gemini for analysis. I will not include Social Security numbers, pay rates, banking details, or other unnecessary sensitive information.</span></label>
+            <div class="ai-compose-actions">
+              <label class="field"><span>Year for dates without a year</span><input type="number" id="aiEntryYear" min="2020" max="2100"></label>
+              <button class="primary-button large" id="analyzeWithAI">Analyze with Gemini</button>
+            </div>
+            <p class="ai-safety-note"><strong>Review required:</strong> Gemini cannot save directly. Every extracted row is shown below for checking and editing before confirmation.</p>
+          </article>
+
+          <aside class="card ai-guide-card">
+            <p class="kicker">WHAT AI CAN READ</p>
+            <h3>Flexible text formats</h3>
+            <ul>
+              <li>One date with one or several worker names</li>
+              <li>A worker name before or after a block of dated lines</li>
+              <li>Addresses, site numbers, and multiple locations</li>
+              <li>Total hours, overtime, start/end times, and off status</li>
+            </ul>
+            <p>Unclear matches are flagged instead of silently saved.</p>
+          </aside>
+        </div>
+
+        <article class="card ai-review-card" id="aiReviewCard" hidden>
+          <div class="card-heading ai-review-heading">
+            <div><p class="kicker">HUMAN REVIEW</p><h2>Check Gemini's extracted records</h2><p id="aiReviewSummary"></p></div>
+            <div class="selection-actions"><button class="ghost-button compact" id="selectReadyAI">Select ready</button><button class="ghost-button compact" id="clearAISelection">Clear selection</button></div>
+          </div>
+          <div class="ai-global-warnings" id="aiGlobalWarnings" hidden></div>
+          <div class="ai-review-list" id="aiReviewList"></div>
+          <div class="sticky-save ai-confirm-bar">
+            <div><strong id="aiSelectedLabel">No records selected</strong><span>Selected records will update the local database only after confirmation.</span></div>
+            <button class="primary-button large" id="confirmAIRecords">Confirm and save selected</button>
+          </div>
+        </article>
+      </section>
+
       <section class="view" id="dailyView">
         <div class="daily-header">
           <div>
@@ -330,7 +363,7 @@
           <div class="empty-state" id="workerMonthPrompt"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg></div><h3>Choose a worker and month</h3><p>The full month will appear here for quick entry.</p></div>
           <div class="table-wrap" id="workerMonthTable" hidden>
             <table class="worker-month-table">
-              <thead><tr><th>Date</th><th>Status</th><th>Location</th><th>Start</th><th>End</th><th>Cost center</th><th>Hours</th><th>Extra $</th><th></th></tr></thead>
+              <thead><tr><th>Date</th><th>Status</th><th>Location split · use ;</th><th>Start</th><th>End</th><th>Cost center</th><th>Total</th><th>OT</th><th>Extra $</th><th></th></tr></thead>
               <tbody id="workerMonthBody"></tbody>
             </table>
           </div>

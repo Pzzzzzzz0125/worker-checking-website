@@ -27,6 +27,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from gemini_parser import extract_work_records, read_api_key
 from worklog_parser import (
     format_work_cell,
     normalize_name,
@@ -106,6 +107,13 @@ CREATE TABLE IF NOT EXISTS work_locations (
     name TEXT NOT NULL,
     hours REAL
 );
+CREATE TABLE IF NOT EXISTS work_location_cost_centers (
+    work_location_id INTEGER NOT NULL REFERENCES work_locations(id) ON DELETE CASCADE,
+    cost_center_id TEXT NOT NULL,
+    cost_center_name TEXT NOT NULL,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(work_location_id, cost_center_id)
+);
 CREATE TABLE IF NOT EXISTS work_day_cost_centers (
     work_day_id INTEGER NOT NULL REFERENCES work_days(id) ON DELETE CASCADE,
     cost_center_id TEXT NOT NULL,
@@ -158,6 +166,8 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 CREATE INDEX IF NOT EXISTS idx_work_days_date ON work_days(work_date);
 CREATE INDEX IF NOT EXISTS idx_work_days_worker ON work_days(worker_id);
+CREATE INDEX IF NOT EXISTS idx_location_centers_cost_center
+ON work_location_cost_centers(cost_center_id);
 """
 
 
@@ -196,6 +206,27 @@ def init_database() -> None:
                 inferred = re.search(r"\b(20\d{2})\b", workbooks[0].name)
                 year = int(inferred.group(1)) if inferred else date.today().year
                 import_baseline(connection, workbooks[0], year)
+        # Prefer the explicitly normalized workbook as the export template,
+        # even when this database was originally created from an older file.
+        normalized_workbooks = sorted(
+            path for path in ROOT.glob("*.xlsx")
+            if "worker" in path.name.casefold()
+            and "normalized" in path.name.casefold()
+        )
+        if normalized_workbooks:
+            normalized = normalized_workbooks[-1]
+            stored = UPLOADS / normalized.name
+            if normalized.resolve() != stored.resolve():
+                shutil.copy2(normalized, stored)
+            inferred = re.search(r"\b(20\d{2})\b", normalized.name)
+            setting(connection, "template_path", str(stored))
+            if inferred:
+                setting(connection, "workbook_year", inferred.group(1))
+            sync_normalized_baseline(
+                connection,
+                normalized,
+                int(inferred.group(1)) if inferred else date.today().year,
+            )
         template = setting(connection, "template_path")
         if template and Path(template).exists():
             sync_worker_compensation(connection, Path(template))
@@ -228,6 +259,18 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             end_time=CASE WHEN end_time='' THEN '16:30' ELSE end_time END,
             work_kind=CASE WHEN work_kind='' THEN 'None' ELSE work_kind END
         WHERE status='worked'
+        """
+    )
+    # Historical day-level cost centers are connected to each location. New
+    # logger entries store the exact per-location relationship directly.
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO work_location_cost_centers(
+            work_location_id, cost_center_id, cost_center_name, display_order
+        )
+        SELECT l.id, a.cost_center_id, a.cost_center_name, a.display_order
+        FROM work_locations l
+        JOIN work_day_cost_centers a ON a.work_day_id=l.work_day_id
         """
     )
     connection.execute(
@@ -301,10 +344,19 @@ def allocate_location_hours(total_hours: float, locations: list[dict]) -> list[d
     )
     unspecified = [item for item in locations if item.get("hours") is None]
     divided = max(float(total_hours) - specified_total, 0) / len(unspecified) if unspecified else 0
+    additive = (
+        max(float(total_hours) - specified_total, 0) / len(locations)
+        if not unspecified and locations else 0
+    )
     return [
         {
+            **item,
             "name": item["name"],
-            "hours": round(float(item["hours"]) if item.get("hours") is not None else divided, 2),
+            "hours": round(
+                float(item["hours"]) + additive
+                if item.get("hours") is not None else divided,
+                2,
+            ),
         }
         for item in locations
     ]
@@ -333,14 +385,28 @@ def work_day_allocations(
     locations_by_day: dict[int, list[dict]] = {}
     for item in connection.execute(
         """
-        SELECT l.work_day_id, l.name, l.hours
+        SELECT l.id location_id, l.work_day_id, l.name, l.hours
         FROM work_locations l JOIN work_days d ON d.id=l.work_day_id
         WHERE d.status='worked' AND d.work_date BETWEEN ? AND ?
         """ + worker_filter + " ORDER BY l.id",
         params,
     ):
         locations_by_day.setdefault(item["work_day_id"], []).append(
-            {"name": item["name"], "hours": item["hours"]}
+            {"location_id": item["location_id"], "name": item["name"], "hours": item["hours"]}
+        )
+    centers_by_location: dict[int, list[dict]] = {}
+    for item in connection.execute(
+        """
+        SELECT l.id location_id, a.cost_center_id, a.cost_center_name
+        FROM work_location_cost_centers a
+        JOIN work_locations l ON l.id=a.work_location_id
+        JOIN work_days d ON d.id=l.work_day_id
+        WHERE d.status='worked' AND d.work_date BETWEEN ? AND ?
+        """ + worker_filter + " ORDER BY a.display_order, a.cost_center_name",
+        params,
+    ):
+        centers_by_location.setdefault(item["location_id"], []).append(
+            {"id": item["cost_center_id"], "name": item["cost_center_name"]}
         )
     centers_by_day: dict[int, list[dict]] = {}
     for item in connection.execute(
@@ -357,9 +423,21 @@ def work_day_allocations(
     output = []
     for row in rows:
         total_hours = float(row["total_hours"] or 0)
-        locations = locations_by_day.get(row["id"], [])
-        centers = centers_by_day.get(row["id"], [])
-        center_hours = round(total_hours / len(centers), 2) if centers else 0
+        locations = allocate_location_hours(
+            total_hours, locations_by_day.get(row["id"], [])
+        )
+        fallback_centers = centers_by_day.get(row["id"], [])
+        center_totals: dict[str, dict] = {}
+        for location in locations:
+            centers = centers_by_location.get(
+                location["location_id"], fallback_centers
+            )
+            share = float(location["hours"]) / len(centers) if centers else 0
+            for center in centers:
+                aggregate = center_totals.setdefault(
+                    center["id"], {**center, "hours": 0.0}
+                )
+                aggregate["hours"] += share
         output.append(
             {
                 "work_day_id": row["id"],
@@ -367,9 +445,10 @@ def work_day_allocations(
                 "worker_name": row["worker_name"],
                 "date": row["work_date"],
                 "total_hours": total_hours,
-                "locations": allocate_location_hours(total_hours, locations),
+                "locations": locations,
                 "cost_centers": [
-                    {**center, "hours": center_hours} for center in centers
+                    {**center, "hours": round(center["hours"], 2)}
+                    for center in center_totals.values()
                 ],
             }
         )
@@ -494,13 +573,22 @@ def day_record(connection: sqlite3.Connection, worker_id: int, work_date: str) -
     if not row:
         return None
     result = dict(row)
-    result["locations"] = [
-        dict(item)
-        for item in connection.execute(
-            "SELECT name, hours FROM work_locations WHERE work_day_id=? ORDER BY id",
-            (row["id"],),
-        )
-    ]
+    result["locations"] = []
+    for item in connection.execute(
+        "SELECT id, name, hours FROM work_locations WHERE work_day_id=? ORDER BY id",
+        (row["id"],),
+    ):
+        location = dict(item)
+        location["cost_centers"] = [
+            {"id": center["cost_center_id"], "name": center["cost_center_name"]}
+            for center in connection.execute(
+                "SELECT cost_center_id, cost_center_name "
+                "FROM work_location_cost_centers WHERE work_location_id=? "
+                "ORDER BY display_order, cost_center_name",
+                (item["id"],),
+            )
+        ]
+        result["locations"].append(location)
     result["cost_centers"] = [
         {"id": item["cost_center_id"], "name": item["cost_center_name"]}
         for item in connection.execute(
@@ -553,40 +641,76 @@ def save_day(
             supplied_centers = old.get("cost_centers", [])
         else:
             supplied_centers = []
-    assigned_centers = []
-    seen_center_ids = set()
-    for supplied in supplied_centers:
-        supplied_id = normalize_space(supplied.get("id", ""))
-        supplied_name = normalize_space(supplied.get("name", ""))
-        if supplied_id:
-            center = connection.execute(
-                "SELECT id, name FROM cost_centers WHERE id=?", (supplied_id,)
-            ).fetchone()
-        elif supplied_name:
-            center = connection.execute(
-                "SELECT id, name FROM cost_centers WHERE name=? COLLATE NOCASE LIMIT 1",
-                (supplied_name,),
-            ).fetchone()
-        else:
+    def resolve_centers(values: list[dict] | None) -> list[dict]:
+        resolved = []
+        seen = set()
+        for supplied in values or []:
+            supplied_id = normalize_space(supplied.get("id", ""))
+            supplied_name = normalize_space(supplied.get("name", ""))
+            if supplied_id:
+                center = connection.execute(
+                    "SELECT id, name FROM cost_centers WHERE id=?", (supplied_id,)
+                ).fetchone()
+            elif supplied_name:
+                center = connection.execute(
+                    "SELECT id, name FROM cost_centers "
+                    "WHERE name=? COLLATE NOCASE LIMIT 1",
+                    (supplied_name,),
+                ).fetchone()
+            else:
+                continue
+            if not center:
+                raise ValueError(f"Unknown cost center {supplied_id or supplied_name}.")
+            if center["id"] not in seen:
+                resolved.append({"id": center["id"], "name": center["name"]})
+                seen.add(center["id"])
+        return resolved
+
+    assigned_centers = resolve_centers(supplied_centers)
+    locations = []
+    for item in payload.get("locations", []):
+        location_name = normalize_space(item.get("name", ""))
+        if not location_name:
             continue
-        if not center:
-            raise ValueError(f"Unknown cost center {supplied_id or supplied_name}.")
-        if center["id"] in seen_center_ids:
-            continue
-        assigned_centers.append({"id": center["id"], "name": center["name"]})
-        seen_center_ids.add(center["id"])
+        location_centers = resolve_centers(
+            item.get("cost_centers")
+            if item.get("cost_centers") is not None
+            else assigned_centers
+        )
+        locations.append(
+            {
+                "name": location_name,
+                "hours": float(item["hours"])
+                if item.get("hours") not in (None, "")
+                else None,
+                "cost_centers": location_centers,
+            }
+        )
+        known = {center["id"] for center in assigned_centers}
+        assigned_centers.extend(
+            center for center in location_centers if center["id"] not in known
+        )
+
     cost_center_id = assigned_centers[0]["id"] if assigned_centers else ""
     cost_center_name = assigned_centers[0]["name"] if assigned_centers else ""
-    locations = [
-        {
-            "name": normalize_space(item.get("name", "")),
-            "hours": float(item["hours"])
-            if item.get("hours") not in (None, "")
-            else None,
-        }
-        for item in payload.get("locations", [])
-        if normalize_space(item.get("name", ""))
-    ]
+    if status == "worked" and source in ("app", "ai-confirmed", "mobile-logger"):
+        explicit_count = sum(item["hours"] is not None for item in locations)
+        if 0 < explicit_count < len(locations):
+            raise ValueError(
+                "Give hours for every location or leave every location hour blank."
+            )
+        explicit_total = sum(item["hours"] or 0 for item in locations)
+        if explicit_count and total_hours is not None and total_hours < explicit_total:
+            raise ValueError(
+                "Total hours cannot be less than the location-hour total."
+            )
+        missing_center = next(
+            (item["name"] for item in locations if not item["cost_centers"]), None
+        )
+        if missing_center:
+            raise ValueError(
+                f"Choose at least one cost center for location {missing_center}."
+            )
     original_text = payload.get("original_text", "")
     if source == "app" or not original_text:
         original_text = format_work_cell(status, total_hours, locations, extra_pay)
@@ -631,10 +755,22 @@ def save_day(
         (worker_id, work_date),
     ).fetchone()["id"]
     connection.execute("DELETE FROM work_locations WHERE work_day_id=?", (work_day_id,))
-    connection.executemany(
-        "INSERT INTO work_locations(work_day_id, name, hours) VALUES(?, ?, ?)",
-        [(work_day_id, item["name"], item["hours"]) for item in locations],
-    )
+    for location in locations:
+        cursor = connection.execute(
+            "INSERT INTO work_locations(work_day_id, name, hours) VALUES(?, ?, ?)",
+            (work_day_id, location["name"], location["hours"]),
+        )
+        connection.executemany(
+            "INSERT INTO work_location_cost_centers("
+            "work_location_id, cost_center_id, cost_center_name, display_order"
+            ") VALUES(?, ?, ?, ?)",
+            [
+                (cursor.lastrowid, center["id"], center["name"], index)
+                for index, center in enumerate(
+                    location["cost_centers"], start=1
+                )
+            ],
+        )
     connection.execute(
         "DELETE FROM work_day_cost_centers WHERE work_day_id=?", (work_day_id,)
     )
@@ -720,6 +856,57 @@ def import_baseline(connection: sqlite3.Connection, path: Path, year: int) -> No
     setting(connection, "baseline_import_id", str(cursor.lastrowid))
 
 
+def sync_normalized_baseline(
+    connection: sqlite3.Connection, path: Path, year: int
+) -> int:
+    """Refresh historical workbook data without replacing app-entered days."""
+    fingerprint = (
+        f"normalized-v2:{path.resolve()}:{path.stat().st_size}:{path.stat().st_mtime_ns}"
+    )
+    if setting(connection, "normalized_workbook_fingerprint") == fingerprint:
+        return 0
+
+    workbook = read_workbook(path, year)
+    synced = 0
+    for sheet in workbook["sheets"]:
+        name_occurrences: dict[str, int] = {}
+        for worker_data in sheet["workers"]:
+            normalized = normalize_name(worker_data["name"])
+            name_occurrences[normalized] = name_occurrences.get(normalized, 0) + 1
+            worker = worker_for_name(
+                connection,
+                worker_data["name"],
+                worker_data["area"],
+                worker_data["nickname"],
+                occurrence=name_occurrences[normalized],
+            )
+            if not worker:
+                continue
+            for day in worker_data["days"]:
+                if not normalize_space(day["value"]):
+                    continue
+                old = day_record(connection, worker["id"], day["date"])
+                if old and old.get("source") in ("app", "ai-confirmed"):
+                    continue
+                parsed = parse_work_cell(day["value"]).to_dict()
+                if old:
+                    parsed["notes"] = old.get("notes", "")
+                save_day(
+                    connection,
+                    worker["id"],
+                    day["date"],
+                    parsed,
+                    "normalized-baseline",
+                )
+                synced += 1
+
+    # Baseline refreshes are mechanical, not user edits, so they do not belong
+    # in the visible audit history.
+    connection.execute("DELETE FROM audit_log WHERE source='normalized-baseline'")
+    setting(connection, "normalized_workbook_fingerprint", fingerprint)
+    return synced
+
+
 def json_response(handler: SimpleHTTPRequestHandler, payload: object, status: int = 200) -> None:
     data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
     handler.send_response(status)
@@ -778,6 +965,178 @@ def serialize_proposal(parsed: dict, worker_name: str) -> dict:
     }
 
 
+def split_ai_values(value: object) -> list[str]:
+    if isinstance(value, list):
+        values = value
+    else:
+        values = re.split(r"\s*[;|]+\s*", str(value or ""))
+    output = []
+    seen = set()
+    for item in values:
+        if isinstance(item, dict):
+            cleaned = normalize_space(item.get("name", "") or item.get("id", ""))
+        else:
+            cleaned = normalize_space(str(item))
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
+            output.append(cleaned)
+            seen.add(key)
+    return output
+
+
+def structured_ai_locations(value: object) -> list[dict]:
+    values = split_ai_values(value)
+    if not values:
+        return []
+    parsed = parse_work_cell(";".join(values)).to_dict()
+    return parsed["locations"]
+
+
+def resolve_ai_cost_centers(connection: sqlite3.Connection, values: object) -> list[dict]:
+    resolved = []
+    seen = set()
+    for value in split_ai_values(values):
+        display_match = re.search(r"·\s*([^·]+)$", value)
+        possible_id = normalize_space(display_match.group(1)) if display_match else value
+        row = connection.execute(
+            "SELECT id, name FROM cost_centers WHERE id=? OR name=? COLLATE NOCASE LIMIT 1",
+            (possible_id, value),
+        ).fetchone()
+        if not row:
+            matches = connection.execute(
+                "SELECT id, name FROM cost_centers WHERE name LIKE ? COLLATE NOCASE "
+                "ORDER BY LENGTH(name), display_order LIMIT 2",
+                (f"%{value}%",),
+            ).fetchall()
+            row = matches[0] if len(matches) == 1 else None
+        if row and row["id"] not in seen:
+            resolved.append({"id": row["id"], "name": row["name"]})
+            seen.add(row["id"])
+    return resolved
+
+
+def match_ai_worker(connection: sqlite3.Connection, source_name: str) -> sqlite3.Row | None:
+    cleaned = normalize_space(source_name)
+    normalized = normalize_name(cleaned)
+    if not normalized:
+        return None
+    exact = connection.execute(
+        "SELECT * FROM workers WHERE normalized_name=? OR name=? COLLATE NOCASE LIMIT 1",
+        (normalized, cleaned),
+    ).fetchone()
+    if exact:
+        return exact
+    candidates = connection.execute(
+        "SELECT * FROM workers WHERE active=1 ORDER BY display_order, name"
+    ).fetchall()
+    source_tokens = normalized.split()
+    if len(source_tokens) == 1:
+        first_matches = [
+            candidate for candidate in candidates
+            if normalize_name(candidate["name"]).split()[:1] == source_tokens
+        ]
+        if len(first_matches) == 1:
+            return first_matches[0]
+    scored = []
+    for candidate in candidates:
+        candidate_normalized = normalize_name(candidate["name"])
+        candidate_tokens = candidate_normalized.split()
+        full_score = SequenceMatcher(None, normalized, candidate_normalized).ratio()
+        first_score = (
+            SequenceMatcher(None, source_tokens[0], candidate_tokens[0]).ratio()
+            if source_tokens and candidate_tokens
+            else 0
+        )
+        if len(source_tokens) == 1:
+            score = first_score
+        else:
+            token_overlap = len(set(source_tokens) & set(candidate_tokens)) / len(source_tokens)
+            score = max(full_score, token_overlap)
+        scored.append((score, candidate))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if not scored or scored[0][0] < 0.88:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.05:
+        return None
+    return scored[0][1]
+
+
+def normalize_ai_records(
+    connection: sqlite3.Connection, raw_records: list[dict], selected_year: int
+) -> list[dict]:
+    output = []
+    for index, raw in enumerate(raw_records, start=1):
+        source_worker = normalize_space(raw.get("worker_name", ""))
+        worker = match_ai_worker(connection, source_worker)
+        issues = []
+        try:
+            work_date = date.fromisoformat(normalize_space(raw.get("date", "")))
+            if work_date.year != selected_year:
+                issues.append(f"Date is outside selected year {selected_year}.")
+            date_value = work_date.isoformat()
+        except ValueError:
+            date_value = normalize_space(raw.get("date", ""))
+            issues.append("Date needs correction.")
+        if not worker:
+            issues.append("Worker name does not match the worker list.")
+        status = raw.get("status") if raw.get("status") in ("worked", "off") else "worked"
+        locations = split_ai_values(raw.get("locations", []))
+        if status == "worked" and not locations:
+            issues.append("Worked record needs a location.")
+        regular_hours = max(float(raw.get("regular_hours") or 0), 0)
+        overtime_hours = max(float(raw.get("overtime_hours") or 0), 0)
+        total_hours = max(float(raw.get("total_hours") or 0), 0)
+        if status == "worked":
+            regular_hours = regular_hours or 8
+            total_hours = total_hours or regular_hours + overtime_hours
+            if overtime_hours:
+                total_hours = max(total_hours, regular_hours + overtime_hours)
+        else:
+            regular_hours = overtime_hours = total_hours = 0
+        center_texts = split_ai_values(raw.get("cost_centers", []))
+        centers = resolve_ai_cost_centers(connection, center_texts)
+        if center_texts and len(centers) != len(center_texts):
+            issues.append("One or more cost centers need correction.")
+        existing = (
+            day_record(connection, worker["id"], date_value)
+            if worker and re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_value)
+            else None
+        )
+        confidence = raw.get("confidence", "low")
+        warning = normalize_space(raw.get("warning", ""))
+        if warning:
+            issues.append(warning)
+        output.append(
+            {
+                "review_id": index,
+                "worker_id": worker["id"] if worker else None,
+                "worker_name": worker["name"] if worker else source_worker,
+                "source_worker_name": source_worker,
+                "date": date_value,
+                "status": status,
+                "locations": locations,
+                "regular_hours": round(regular_hours, 2),
+                "overtime_hours": round(overtime_hours, 2),
+                "total_hours": round(total_hours, 2),
+                "extra_pay": round(max(float(raw.get("extra_pay") or 0), 0), 2),
+                "start_time": normalize_space(raw.get("start_time", "")),
+                "end_time": normalize_space(raw.get("end_time", "")),
+                "cost_centers": centers,
+                "cost_center_text": " ; ".join(center_texts),
+                "notes": normalize_space(raw.get("notes", "")),
+                "confidence": confidence,
+                "source_excerpt": normalize_space(raw.get("source_excerpt", "")),
+                "issues": issues,
+                "existing": bool(existing),
+                "ready": bool(worker and not any(
+                    issue.startswith(("Date needs", "Worked record", "Worker name", "Date is outside"))
+                    for issue in issues
+                )),
+            }
+        )
+    return output
+
+
 class WorklogHandler(SimpleHTTPRequestHandler):
     server_version = "Worklog/1.0"
 
@@ -803,6 +1162,8 @@ class WorklogHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
             return
         path = "/index.html" if parsed.path in ("", "/") else parsed.path
+        if path in ("/log", "/log/"):
+            path = "/logger.html"
         target = (STATIC / path.lstrip("/")).resolve()
         if STATIC.resolve() not in target.parents or not target.is_file():
             self.send_error(404)
@@ -829,6 +1190,8 @@ class WorklogHandler(SimpleHTTPRequestHandler):
     def serve_static(self, path: str) -> None:
         if path in ("", "/"):
             path = "/index.html"
+        elif path in ("/log", "/log/"):
+            path = "/logger.html"
         target = (STATIC / path.lstrip("/")).resolve()
         if STATIC.resolve() not in target.parents or not target.is_file():
             self.send_error(404)
@@ -842,6 +1205,128 @@ class WorklogHandler(SimpleHTTPRequestHandler):
         self.wfile.write(content)
 
     def handle_api_get(self, path: str, query: dict) -> None:
+        if path == "/api/logger/bootstrap":
+            worker_id = int(query_value(query, "worker_id", "0") or 0)
+            with connect() as connection:
+                workers = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT w.id, w.name, COUNT(d.id) usage_count,
+                               MAX(d.work_date) last_used
+                        FROM workers w
+                        LEFT JOIN work_days d ON d.worker_id=w.id AND d.status='worked'
+                        WHERE w.active=1
+                        GROUP BY w.id
+                        ORDER BY usage_count DESC, last_used DESC,
+                                 w.display_order, w.name
+                        """
+                    )
+                ]
+                locations = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT MIN(l.name) name, COUNT(*) usage_count,
+                               SUM(CASE WHEN d.worker_id=? THEN 1 ELSE 0 END) worker_usage,
+                               MAX(d.work_date) last_used
+                        FROM work_locations l
+                        JOIN work_days d ON d.id=l.work_day_id
+                        WHERE d.status='worked' AND TRIM(l.name)<>''
+                        GROUP BY LOWER(TRIM(l.name))
+                        ORDER BY worker_usage DESC, usage_count DESC, last_used DESC, name
+                        LIMIT 100
+                        """,
+                        (worker_id,),
+                    )
+                ]
+                cost_centers = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT c.id, c.name, COUNT(a.work_location_id) usage_count
+                        FROM cost_centers c
+                        LEFT JOIN work_location_cost_centers a
+                          ON a.cost_center_id=c.id
+                        GROUP BY c.id
+                        ORDER BY usage_count DESC, c.display_order, c.name
+                        """
+                    )
+                ]
+                json_response(self, {
+                    "workers": workers,
+                    "locations": locations,
+                    "cost_centers": cost_centers,
+                    "today": date.today().isoformat(),
+                })
+            return
+
+        if path == "/api/logger/cost-centers":
+            worker_id = int(query_value(query, "worker_id", "0") or 0)
+            location = normalize_space(query_value(query, "location", ""))
+            with connect() as connection:
+                centers = [
+                    dict(row)
+                    for row in connection.execute(
+                        """
+                        SELECT a.cost_center_id id, MIN(a.cost_center_name) name,
+                               COUNT(*) usage_count,
+                               SUM(CASE WHEN d.worker_id=? THEN 1 ELSE 0 END) worker_usage,
+                               MAX(d.work_date) last_used
+                        FROM work_location_cost_centers a
+                        JOIN work_locations l ON l.id=a.work_location_id
+                        JOIN work_days d ON d.id=l.work_day_id
+                        WHERE LOWER(TRIM(l.name))=LOWER(TRIM(?))
+                        GROUP BY a.cost_center_id
+                        ORDER BY worker_usage DESC, usage_count DESC, last_used DESC, name
+                        """,
+                        (worker_id, location),
+                    )
+                ]
+                json_response(self, {"location": location, "cost_centers": centers})
+            return
+
+        if path == "/api/logger/day":
+            worker_id = int(query_value(query, "worker_id", "0"))
+            selected_date = date.fromisoformat(
+                query_value(query, "date", date.today().isoformat())
+            ).isoformat()
+            with connect() as connection:
+                worker = connection.execute(
+                    "SELECT id, name FROM workers WHERE id=? AND active=1", (worker_id,)
+                ).fetchone()
+                if not worker:
+                    raise ValueError("Choose a valid worker.")
+                record = day_record(connection, worker_id, selected_date) or {
+                    "worker_id": worker_id,
+                    "work_date": selected_date,
+                    "status": "worked",
+                    "total_hours": 8,
+                    "extra_pay": 0,
+                    "start_time": "08:30",
+                    "end_time": "16:30",
+                    "notes": "",
+                    "locations": [],
+                    "cost_centers": [],
+                }
+                json_response(self, {"worker": dict(worker), "record": record})
+            return
+
+        if path == "/api/logger/recent":
+            worker_id = int(query_value(query, "worker_id", "0"))
+            before = date.fromisoformat(
+                query_value(query, "before", date.today().isoformat())
+            ).isoformat()
+            with connect() as connection:
+                row = connection.execute(
+                    "SELECT work_date FROM work_days WHERE worker_id=? "
+                    "AND status='worked' AND work_date<? ORDER BY work_date DESC LIMIT 1",
+                    (worker_id, before),
+                ).fetchone()
+                record = day_record(connection, worker_id, row["work_date"]) if row else None
+                json_response(self, {"record": record})
+            return
+
         if path == "/api/bootstrap":
             with connect() as connection:
                 workers = [
@@ -876,6 +1361,7 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                         "workers": workers,
                         "cost_centers": cost_centers,
                         "locations": locations,
+                        "ai_configured": bool(read_api_key(DATA)),
                         "review_count": review_count,
                         "last_recorded_date": last_date,
                         "workbook_year": int(
@@ -1138,17 +1624,11 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                 result = []
                 for row in rows:
                     item = dict(row)
-                    item["locations"] = (
-                        [
-                            dict(location)
-                            for location in connection.execute(
-                                "SELECT name, hours FROM work_locations WHERE work_day_id=? ORDER BY id",
-                                (row["day_id"],),
-                            )
-                        ]
-                        if row["day_id"]
-                        else []
+                    complete = (
+                        day_record(connection, row["worker_id"], selected_date)
+                        if row["day_id"] else None
                     )
+                    item["locations"] = complete["locations"] if complete else []
                     item["cost_centers"] = assigned_cost_centers(
                         connection, row["day_id"]
                     )
@@ -1275,9 +1755,16 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                             (row["id"],),
                         )
                     ]
-                    value = row["original_text"] if row["source"] in ("baseline", "import") else format_work_cell(
-                        row["status"], row["total_hours"], locations, row["extra_pay"]
-                    )
+                    if row["status"] == "unknown":
+                        value = normalize_space(row["original_text"])
+                    elif row["status"] == "off" and re.fullmatch(
+                        r"off\s*\([^)]*\)", normalize_space(row["original_text"]), re.IGNORECASE
+                    ):
+                        value = normalize_space(row["original_text"])
+                    else:
+                        value = format_work_cell(
+                            row["status"], row["total_hours"], locations, row["extra_pay"]
+                        )
                     updates.append(
                         {
                             "worker_name": row["workbook_name"],
@@ -1304,6 +1791,177 @@ class WorklogHandler(SimpleHTTPRequestHandler):
         json_response(self, {"error": "Not found"}, 404)
 
     def handle_api_post(self, path: str, query: dict) -> None:
+        if path == "/api/logger/day":
+            payload = read_json(self)
+            worker_id = int(payload.get("worker_id") or 0)
+            selected_date = date.fromisoformat(
+                normalize_space(payload.get("date", ""))
+            ).isoformat()
+            record = payload.get("record") or {}
+            status = record.get("status")
+            if status not in ("worked", "off"):
+                raise ValueError("Choose Worked or Off.")
+            locations = record.get("locations", []) if status == "worked" else []
+            if status == "worked" and not locations:
+                raise ValueError("Add at least one work location.")
+            all_centers = []
+            seen_centers = set()
+            for location in locations:
+                name = normalize_space(location.get("name", ""))
+                if not name:
+                    raise ValueError("Every location needs a name.")
+                centers = location.get("cost_centers", [])
+                if not centers:
+                    raise ValueError(
+                        f"Choose at least one cost center for location {name}."
+                    )
+                for center in centers:
+                    key = normalize_space(center.get("id", ""))
+                    if key and key not in seen_centers:
+                        all_centers.append(center)
+                        seen_centers.add(key)
+            record["locations"] = locations
+            record["cost_centers"] = all_centers
+            if status == "off":
+                record.update({"total_hours": 0, "extra_pay": 0, "locations": [], "cost_centers": []})
+            with connect() as connection:
+                worker = connection.execute(
+                    "SELECT id, name FROM workers WHERE id=? AND active=1", (worker_id,)
+                ).fetchone()
+                if not worker:
+                    raise ValueError("Choose a valid worker.")
+                saved = save_day(
+                    connection, worker_id, selected_date, record, "mobile-logger"
+                )
+                json_response(self, {
+                    "saved": True,
+                    "worker": dict(worker),
+                    "date": selected_date,
+                    "record": saved,
+                })
+            return
+
+        if path == "/api/ai/parse":
+            payload = read_json(self)
+            if payload.get("consent") is not True:
+                raise ValueError(
+                    "Confirm that you understand the pasted text will be sent to Google Gemini."
+                )
+            source_text = str(payload.get("text", "")).strip()
+            if not source_text:
+                raise ValueError("Paste work information before analyzing it.")
+            if len(source_text) > 50_000:
+                raise ValueError("Pasted text is too long; use 50,000 characters or fewer.")
+            selected_year = int(payload.get("year") or date.today().year)
+            if not 2020 <= selected_year <= 2100:
+                raise ValueError("Choose a valid year.")
+            extracted = extract_work_records(
+                source_text, selected_year, DATA
+            )
+            with connect() as connection:
+                records = normalize_ai_records(
+                    connection, extracted.get("records", []), selected_year
+                )
+            json_response(
+                self,
+                {
+                    "model": "Gemini",
+                    "summary": normalize_space(extracted.get("summary", "")),
+                    "warnings": [
+                        normalize_space(item)
+                        for item in extracted.get("warnings", [])
+                        if normalize_space(item)
+                    ],
+                    "records": records,
+                },
+            )
+            return
+
+        if path == "/api/ai/apply":
+            payload = read_json(self)
+            proposed = payload.get("records", [])
+            if not proposed:
+                raise ValueError("Select at least one AI record to save.")
+            if len(proposed) > 500:
+                raise ValueError("Save 500 records or fewer at one time.")
+            with connect() as connection:
+                saved = []
+                seen = set()
+                for index, record in enumerate(proposed, start=1):
+                    worker_name = normalize_space(record.get("worker_name", ""))
+                    worker = match_ai_worker(connection, worker_name)
+                    if not worker:
+                        raise ValueError(f"Row {index}: choose a valid worker.")
+                    try:
+                        work_date = date.fromisoformat(
+                            normalize_space(record.get("date", ""))
+                        ).isoformat()
+                    except ValueError:
+                        raise ValueError(f"Row {index}: enter a valid date.") from None
+                    duplicate_key = (worker["id"], work_date)
+                    if duplicate_key in seen:
+                        raise ValueError(
+                            f"Row {index}: {worker['name']} already has another selected record for {work_date}."
+                        )
+                    seen.add(duplicate_key)
+                    status = record.get("status")
+                    if status not in ("worked", "off"):
+                        raise ValueError(f"Row {index}: choose Worked or Off.")
+                    locations = split_ai_values(record.get("locations", []))
+                    if status == "worked" and not locations:
+                        raise ValueError(f"Row {index}: enter at least one location.")
+                    location_items = structured_ai_locations(locations)
+                    regular_hours = max(float(record.get("regular_hours") or 0), 0)
+                    overtime_hours = max(float(record.get("overtime_hours") or 0), 0)
+                    total_hours = max(float(record.get("total_hours") or 0), 0)
+                    if status == "worked":
+                        if location_items and all(
+                            item.get("hours") is not None for item in location_items
+                        ):
+                            regular_hours = sum(item["hours"] for item in location_items)
+                        regular_hours = regular_hours or 8
+                        total_hours = total_hours or regular_hours + overtime_hours
+                        total_hours = max(total_hours, regular_hours + overtime_hours)
+                    else:
+                        total_hours = 0
+                    center_values = record.get("cost_centers", [])
+                    centers = resolve_ai_cost_centers(connection, center_values)
+                    if split_ai_values(center_values) and not centers:
+                        raise ValueError(f"Row {index}: choose valid cost centers.")
+                    existing = day_record(connection, worker["id"], work_date)
+                    if not split_ai_values(center_values) and existing:
+                        centers = existing.get("cost_centers", [])
+                    saved_record = save_day(
+                        connection,
+                        worker["id"],
+                        work_date,
+                        {
+                            "status": status,
+                            "total_hours": total_hours,
+                            "extra_pay": float(record.get("extra_pay") or 0),
+                            "start_time": normalize_space(record.get("start_time", ""))
+                            or ("08:30" if status == "worked" else ""),
+                            "end_time": normalize_space(record.get("end_time", ""))
+                            or ("16:30" if status == "worked" else ""),
+                            "locations": location_items,
+                            "cost_centers": centers,
+                            "notes": normalize_space(record.get("notes", "")),
+                            "confidence": "high",
+                            "warning": None,
+                        },
+                        "ai-confirmed",
+                    )
+                    saved.append(
+                        {
+                            "worker_id": worker["id"],
+                            "worker_name": worker["name"],
+                            "date": work_date,
+                            "id": saved_record["id"],
+                        }
+                    )
+                json_response(self, {"saved": len(saved), "records": saved})
+            return
+
         if path == "/api/workers":
             payload = read_json(self)
             name = normalize_space(payload.get("name", ""))

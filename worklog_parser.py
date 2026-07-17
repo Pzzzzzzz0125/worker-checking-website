@@ -16,7 +16,7 @@ HOURS_RE = re.compile(
     r"(?P<hours>\d+(?:\.\d+)?)\s*h(?:ou)?r?s?\b", re.IGNORECASE
 )
 PAREN_HOURS_RE = re.compile(
-    r"\(\s*(?P<hours>\d+(?:\.\d+)?)\s*h(?:ou)?r?s?\s*\)",
+    r"\(\s*(?P<hours>\d+(?:\.\d+)?)\s*(?:h(?:ou)?r?s?)?\s*\)",
     re.IGNORECASE,
 )
 OT_RE = re.compile(
@@ -28,12 +28,13 @@ MORE_HOURS_RE = re.compile(
     re.IGNORECASE,
 )
 MONEY_RE = re.compile(
-    r"\$\s*(?P<amount>\d+(?:\.\d+)?)\s*(?:dollars?)?\s*(?:more|extra)?",
+    r"(?:\b(?:ex|extra)\s*)?\$\s*(?P<amount>\d+(?:\.\d+)?)"
+    r"\s*(?:dollars?)?\s*(?:more|extra)?",
     re.IGNORECASE,
 )
 HALF_DAY_RE = re.compile(r"\bhalf\s*day\b", re.IGNORECASE)
 OFF_RE = re.compile(r"^\s*(?:off\b.*|no\s*work\b.*|休息.*)\s*$", re.IGNORECASE)
-SEPARATOR_RE = re.compile(r"\s*(?:/|\+|,)\s*")
+LEGACY_SEPARATOR_RE = re.compile(r"\s*(?:/|\+|,)\s*")
 
 
 @dataclass
@@ -86,9 +87,15 @@ def _clean_location(value: str) -> str:
 
 
 def _split_locations(text: str) -> list[str]:
-    # Keep commas that are clearly part of an annotation out of the split.
-    text = re.sub(r",?\s*\bOT\b", " OT ", text, flags=re.IGNORECASE)
-    candidates = SEPARATOR_RE.split(text)
+    # Normalized workbooks use semicolons only. We still accept the old slash,
+    # plus, and comma forms on import so historical workbooks remain usable.
+    text = OT_RE.sub("", text)
+    text = MORE_HOURS_RE.sub("", text)
+    text = MONEY_RE.sub("", text)
+    text = HALF_DAY_RE.sub("", text)
+    text = re.sub(r"\b(?:ex|extra)\b", "", text, flags=re.IGNORECASE)
+    text = text.strip(" \t\r\n,")
+    candidates = re.split(r"\s*;\s*", text) if ";" in text else LEGACY_SEPARATOR_RE.split(text)
     return [item for item in (normalize_space(x) for x in candidates) if item]
 
 
@@ -105,6 +112,17 @@ def parse_work_cell(value: object) -> ParseResult:
             original_text=original,
             confidence="low",
             warning="Blank cell — confirm whether this means off or not recorded.",
+        )
+
+    if text in {"-", "—"}:
+        return ParseResult(
+            status="unknown",
+            total_hours=None,
+            locations=[],
+            extra_pay=0,
+            original_text=original,
+            confidence="low",
+            warning="Dash means no normalized work information was recorded.",
         )
 
     if OFF_RE.match(text):
@@ -158,21 +176,20 @@ def parse_work_cell(value: object) -> ParseResult:
             if hours is not None:
                 explicit_hours.append(hours)
 
+    additive_hours = overtime + more_hours
     if explicit_hours:
         if len(explicit_hours) == len(locations):
-            total_hours = sum(explicit_hours)
+            total_hours = sum(explicit_hours) + additive_hours
         elif len(locations) == 1:
-            total_hours = explicit_hours[0]
+            total_hours = explicit_hours[0] + additive_hours
         else:
             # Example: "1417 (6h) / 771" means two locations, but only the
             # total/default distribution is not fully specified.
-            total_hours = max(8.0, sum(explicit_hours))
+            total_hours = max(8.0, sum(explicit_hours)) + additive_hours
     elif half_day:
-        total_hours = 4.0
-    elif more_hours:
-        total_hours = 8.0 + more_hours
-    elif overtime:
-        total_hours = 8.0 + overtime
+        total_hours = 4.0 + additive_hours
+    elif additive_hours:
+        total_hours = 8.0 + additive_hours
     else:
         total_hours = 8.0
 
@@ -215,23 +232,47 @@ def format_work_cell(
         return ""
 
     def number(value: float) -> str:
-        return str(int(value)) if float(value).is_integer() else str(value)
+        return f"{float(value):.2f}".rstrip("0").rstrip(".")
 
-    all_split = all(item.get("hours") not in (None, "") for item in valid_locations)
-    if len(valid_locations) > 1 and all_split:
-        value = " / ".join(
-            f"{normalize_space(item['name'])} ({number(float(item['hours']))}h)"
+    supplied_total = float(total_hours) if total_hours not in (None, "") else 8.0
+    explicit = [item.get("hours") not in (None, "") for item in valid_locations]
+    all_split = all(explicit)
+    no_split = not any(explicit)
+
+    if all_split:
+        regular_hours = sum(float(item["hours"]) for item in valid_locations)
+        parts = [
+            f"{normalize_space(item['name'])}({number(float(item['hours']))})"
             for item in valid_locations
-        )
-    elif len(valid_locations) > 1:
-        value = " / ".join(normalize_space(item["name"]) for item in valid_locations)
-        if total_hours not in (None, 8, 8.0):
-            value += f" ({number(float(total_hours))}h total)"
+        ]
+    elif no_split and supplied_total < 8:
+        # A sub-eight-hour day must be explicit in the normalized workbook.
+        regular_hours = supplied_total
+        if len(valid_locations) == 1:
+            allocations = [regular_hours]
+        else:
+            share = round(regular_hours / len(valid_locations), 2)
+            allocations = [share] * (len(valid_locations) - 1)
+            allocations.append(round(regular_hours - sum(allocations), 2))
+        parts = [
+            f"{normalize_space(item['name'])}({number(hours)})"
+            for item, hours in zip(valid_locations, allocations)
+        ]
     else:
-        value = normalize_space(valid_locations[0]["name"])
-        if total_hours not in (None, 8, 8.0):
-            value += f" ({number(float(total_hours))}h)"
+        regular_hours = 8.0 if no_split else max(
+            8.0,
+            sum(float(item["hours"]) for item in valid_locations if item.get("hours") not in (None, "")),
+        )
+        parts = [
+            f"{normalize_space(item['name'])}"
+            + (f"({number(float(item['hours']))})" if item.get("hours") not in (None, "") else "")
+            for item in valid_locations
+        ]
 
+    value = ";".join(parts)
+    overtime = max(supplied_total - regular_hours, 0)
+    if overtime:
+        value += f", ot {number(overtime)}h"
     if extra_pay:
-        value += f" (${number(float(extra_pay))} more)"
+        value += f", ex ${number(float(extra_pay))}"
     return value
