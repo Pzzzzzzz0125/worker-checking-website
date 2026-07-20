@@ -50,18 +50,24 @@ class LocationCostCenterTests(unittest.TestCase):
         self.assertEqual(sum(item["hours"] for item in allocations["locations"]), 10)
         self.assertEqual(sum(item["hours"] for item in allocations["cost_centers"]), 10)
 
-    def test_logger_requires_a_center_for_every_location(self):
-        with self.assertRaisesRegex(ValueError, "Choose at least one cost center"):
-            save_day(
-                self.connection, 1, "2026-07-18",
-                {
-                    "status": "worked", "total_hours": 8,
-                    "locations": [
-                        {"name": "North", "hours": None, "cost_centers": []}
-                    ],
-                },
-                "mobile-logger",
-            )
+    def test_logger_allows_a_location_without_a_cost_center(self):
+        save_day(
+            self.connection, 1, "2026-07-18",
+            {
+                "status": "worked", "total_hours": 8,
+                "locations": [
+                    {"name": "North", "hours": None, "cost_centers": []}
+                ],
+            },
+            "mobile-logger",
+        )
+        record = day_record(self.connection, 1, "2026-07-18")
+        self.assertEqual(record["locations"][0]["cost_centers"], [])
+        allocations = work_day_allocations(
+            self.connection, "2026-07-18", "2026-07-18", 1
+        )[0]
+        self.assertEqual(allocations["locations"][0]["hours"], 8)
+        self.assertEqual(allocations["cost_centers"], [])
 
 
 if __name__ == "__main__":

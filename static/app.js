@@ -84,14 +84,14 @@ function parseNormalizedLocations(value) {
 }
 
 function locationEditorValue(record) {
-  return (record.locations || []).map(item =>
+  return (record.locations || []).filter(item => item.name.trim()).map(item =>
     `${item.name}${item.hours != null ? `(${compactNumber(item.hours)})` : ""}`
   ).join(";");
 }
 
 function derivedOvertime(record) {
   if (record.status !== "worked") return 0;
-  const locations = record.locations || [];
+  const locations = (record.locations || []).filter(item => item.name.trim());
   const explicit = locations.length && locations.every(item => item.hours != null);
   const regular = explicit
     ? locations.reduce((sum, item) => sum + Number(item.hours || 0), 0)
@@ -101,9 +101,10 @@ function derivedOvertime(record) {
 
 function normalizedWorkCell(record) {
   if (record.status === "off") return "off";
-  if (record.status !== "worked" || !(record.locations || []).length) return "—";
+  if (record.status !== "worked") return "—";
   const total = Number(record.total_hours || 0);
-  const locations = record.locations || [];
+  const locations = (record.locations || []).filter(item => item.name.trim());
+  if (!locations.length) return "—";
   const explicit = locations.filter(item => item.hours != null).length;
   if (explicit > 0 && explicit < locations.length) return "Fix the location-hour split";
   let regular = 8;
@@ -132,11 +133,12 @@ function normalizedWorkCell(record) {
 
 function locationValidationError(record) {
   if (record.location_error) return record.location_error;
-  const locations = record.locations || [];
+  const locations = (record.locations || []).filter(item => item.name.trim());
   const explicit = locations.filter(item => item.hours != null).length;
-  return explicit > 0 && explicit < locations.length
-    ? "Give hours for every location, or leave hours blank for every location."
-    : "";
+  if (explicit > 0 && explicit < locations.length) {
+    return "Give hours for every location, or leave hours blank for every location.";
+  }
+  return "";
 }
 
 function costCenterDisplay(center) {
@@ -166,6 +168,104 @@ function addRecordCostCenter(record, value) {
   const centers = recordCostCenters(record);
   if (!centers.some(item => item.id === center.id)) centers.push({ ...center });
   return true;
+}
+
+function hydrateLinkedLocations(record, addBlank = false) {
+  record.locations = (record.locations || []).map(location => ({
+    ...location,
+    cost_centers: Array.isArray(location.cost_centers)
+      ? location.cost_centers.map(center => ({ ...center }))
+      : recordCostCenters(record).map(center => ({ ...center }))
+  }));
+  if (addBlank && record.status === "worked" && !record.locations.length) {
+    record.locations.push({ name: "", hours: null, cost_centers: [] });
+  }
+  return record;
+}
+
+function linkedRecordCostCenters(record) {
+  const output = [];
+  const seen = new Set();
+  (record.locations || []).forEach(location => {
+    (location.cost_centers || []).forEach(center => {
+      if (!seen.has(center.id)) {
+        output.push({ id: center.id, name: center.name });
+        seen.add(center.id);
+      }
+    });
+  });
+  return output;
+}
+
+function renderLinkedLocationEditor(record, disabled, compact = false) {
+  hydrateLinkedLocations(record, true);
+  const rows = record.locations.map((location, index) => {
+    const centers = (location.cost_centers || []).map((center, centerIndex) => `
+      <span class="linked-center-chip">${escapeHTML(costCenterDisplay(center))}<button type="button" data-linked-remove-center="${centerIndex}" aria-label="Remove ${escapeHTML(center.name)}" ${disabled ? "disabled" : ""}>×</button></span>
+    `).join("");
+    return `<div class="linked-location-row" data-linked-location-index="${index}">
+      <label><span>Location ${index + 1}</span><input data-linked-location-field="name" list="locationSuggestions" value="${escapeHTML(location.name)}" placeholder="Search or type location" ${disabled ? "disabled" : ""}></label>
+      <label class="linked-hours"><span>Hours</span><input data-linked-location-field="hours" type="number" min="0" max="24" step=".25" value="${location.hours == null ? "" : compactNumber(location.hours)}" placeholder="Auto" ${disabled ? "disabled" : ""}></label>
+      <div class="linked-centers"><span>Cost center(s) <small>(optional)</small></span><div class="linked-center-chips">${centers || "<small>None selected</small>"}</div><input data-linked-location-field="cost_center_add" list="costCenterSuggestions" placeholder="Search and add cost center" autocomplete="off" ${disabled ? "disabled" : ""}></div>
+      <button type="button" class="linked-remove-location" data-linked-remove-location aria-label="Remove location" ${disabled ? "disabled" : ""}>×</button>
+    </div>`;
+  }).join("");
+  return `<div class="linked-location-editor ${compact ? "compact" : ""}">${rows}<button type="button" class="linked-add-location" data-linked-add-location ${disabled ? "disabled" : ""}>＋ Add location</button></div>`;
+}
+
+function syncLinkedLocationHours(record) {
+  const locations = (record.locations || []).filter(location => location.name.trim());
+  if (locations.length && locations.every(location => location.hours != null)) {
+    record.total_hours = locations.reduce(
+      (sum, location) => sum + Number(location.hours || 0), 0
+    ) + Number(record.overtime_hours || 0);
+  }
+}
+
+function updateLinkedLocation(record, target) {
+  const row = target.closest("[data-linked-location-index]");
+  const field = target.dataset.linkedLocationField;
+  if (!row || !field) return "";
+  const location = record.locations[Number(row.dataset.linkedLocationIndex)];
+  if (field === "name") location.name = target.value;
+  else if (field === "hours") {
+    location.hours = target.value === "" ? null : Number(target.value);
+    syncLinkedLocationHours(record);
+  } else if (field === "cost_center_add") {
+    const center = resolveCostCenter(target.value);
+    if (!center) return "";
+    if (!location.cost_centers.some(item => item.id === center.id)) {
+      location.cost_centers.push({ ...center });
+    }
+    return "render";
+  }
+  return "changed";
+}
+
+function clickLinkedLocation(record, target) {
+  if (target.closest("[data-linked-add-location]")) {
+    record.locations.push({ name: "", hours: null, cost_centers: [] });
+    return true;
+  }
+  const row = target.closest("[data-linked-location-index]");
+  if (!row) return false;
+  const locationIndex = Number(row.dataset.linkedLocationIndex);
+  if (target.closest("[data-linked-remove-location]")) {
+    record.locations.splice(locationIndex, 1);
+    if (!record.locations.length) {
+      record.locations.push({ name: "", hours: null, cost_centers: [] });
+    }
+    syncLinkedLocationHours(record);
+    return true;
+  }
+  const removeCenter = target.closest("[data-linked-remove-center]");
+  if (removeCenter) {
+    record.locations[locationIndex].cost_centers.splice(
+      Number(removeCenter.dataset.linkedRemoveCenter), 1
+    );
+    return true;
+  }
+  return false;
 }
 
 function renderCostCenterPicker(record, fieldAttribute, disabled) {
@@ -674,7 +774,7 @@ function syncWorkerMonthDraft() {
     extra_pay: day.extra_pay,
     start_time: day.start_time,
     end_time: day.end_time,
-    cost_centers: recordCostCenters(day).map(center => ({ ...center })),
+    cost_centers: linkedRecordCostCenters(day),
     notes: day.notes,
     locations: day.locations
   }));
@@ -706,6 +806,8 @@ async function loadWorkerMonth() {
       overtime_hours: derivedOvertime(day),
       dirty: false
     }));
+    data.selected_dates = new Set();
+    data.copy_targets = [];
     state.workerMonth = data;
     try {
       const drafts = JSON.parse(localStorage.getItem(workerMonthDraftKey()) || "[]");
@@ -719,6 +821,7 @@ async function loadWorkerMonth() {
         }
       });
     } catch {}
+    data.days.forEach(day => hydrateLinkedLocations(day, true));
     $("#workerMonthSearch").value = data.worker.name;
     renderWorkerMonth();
   } catch (error) {
@@ -735,20 +838,20 @@ function renderWorkerMonth() {
   $("#workerMonthTable").hidden = false;
   $("#workerMonthSummary").hidden = false;
   $("#workerMonthSaveBar").hidden = false;
+  $("#workerCopyBar").hidden = false;
   $("#workerMonthName").textContent = data.worker.name;
   $("#workerMonthBody").innerHTML = data.days.map((day, index) => {
     const worked = day.status === "worked";
     const weekday = new Date(`${day.work_date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" });
     const weekend = ["Sat", "Sun"].includes(weekday);
-    const location = locationEditorValue(day);
     return `
       <tr data-month-index="${index}" class="${weekend ? "weekend " : ""}${day.status === "off" ? "off-row" : ""}">
+        <td class="copy-day-cell"><input type="checkbox" data-select-worker-day ${data.selected_dates.has(day.work_date) ? "checked" : ""} aria-label="Select ${escapeHTML(displayDate(day.work_date))} to copy"></td>
         <td class="date-label"><strong>${displayDate(day.work_date)}</strong><span>${weekday}</span></td>
         <td><select data-month-field="status"><option value="" ${!day.status ? "selected" : ""}>Not set</option><option value="worked" ${worked ? "selected" : ""}>Worked</option><option value="off" ${day.status === "off" ? "selected" : ""}>Off</option></select></td>
-        <td><input class="month-location" data-month-field="location" value="${escapeHTML(location)}" placeholder="444;111 or 432(3);1151(5)" title="Use semicolons between locations. Put optional hours in parentheses." ${worked ? "" : "disabled"}><code class="month-normalized">${escapeHTML(normalizedWorkCell(day))}</code></td>
+        <td class="month-linked-locations">${renderLinkedLocationEditor(day, !worked, true)}<code class="month-normalized">${escapeHTML(normalizedWorkCell(day))}</code></td>
         <td><input class="month-time" data-month-field="start_time" type="time" value="${escapeHTML(day.start_time)}" ${worked ? "" : "disabled"}></td>
         <td><input class="month-time" data-month-field="end_time" type="time" value="${escapeHTML(day.end_time)}" ${worked ? "" : "disabled"}></td>
-        <td class="month-cost-center">${renderCostCenterPicker(day, "data-month-field", !worked)}</td>
         <td><input class="month-number" data-month-field="total_hours" type="number" min="0" max="24" step=".25" value="${number(day.total_hours, 2)}" ${worked ? "" : "disabled"}></td>
         <td><input class="month-number" data-month-field="overtime_hours" type="number" min="0" max="16" step=".25" value="${number(day.overtime_hours, 2)}" ${worked ? "" : "disabled"}></td>
         <td><input class="month-number" data-month-field="extra_pay" type="number" min="0" step="1" value="${number(day.extra_pay)}" ${worked ? "" : "disabled"}></td>
@@ -756,6 +859,7 @@ function renderWorkerMonth() {
       </tr>`;
   }).join("");
   updateWorkerMonthSummary();
+  updateWorkerCopyBar();
 }
 
 function updateWorkerMonthSummary() {
@@ -815,6 +919,94 @@ function stepWorkerMonth(amount) {
   if ($("#workerMonthSearch").value) loadWorkerMonth();
 }
 
+function selectedWorkerMonthDays() {
+  if (!state.workerMonth) return [];
+  return state.workerMonth.days.filter(day =>
+    state.workerMonth.selected_dates.has(day.work_date)
+  );
+}
+
+function updateWorkerCopyBar() {
+  if (!state.workerMonth) return;
+  const count = state.workerMonth.selected_dates.size;
+  $("#workerCopyCount").textContent = `${count} ${count === 1 ? "day" : "days"} selected`;
+  $("#openWorkerCopy").disabled = count === 0;
+}
+
+function renderCopyTargets() {
+  if (!state.workerMonth) return;
+  const targets = state.workerMonth.copy_targets;
+  $("#copyTargetList").innerHTML = targets.length ? targets.map(worker => `
+    <span class="copy-target-chip">${escapeHTML(worker.name)}<button type="button" data-remove-copy-worker="${worker.id}" aria-label="Remove ${escapeHTML(worker.name)}">×</button></span>
+  `).join("") : "<small>No destination workers selected.</small>";
+  $("#confirmWorkerCopy").disabled = !targets.length;
+}
+
+function addCopyTarget() {
+  if (!state.workerMonth) return;
+  const worker = resolveWorkerName($("#copyWorkerSearch").value);
+  if (!worker) {
+    toast("Choose a destination worker from the list.", "error");
+    return;
+  }
+  if (worker.id === state.workerMonth.worker.id) {
+    toast("The source worker is already included.", "error");
+    return;
+  }
+  if (!state.workerMonth.copy_targets.some(item => item.id === worker.id)) {
+    state.workerMonth.copy_targets.push(worker);
+  }
+  $("#copyWorkerSearch").value = "";
+  renderCopyTargets();
+}
+
+function openWorkerCopyDialog() {
+  const days = selectedWorkerMonthDays();
+  if (!days.length) return;
+  const missing = days.find(day => day.status === "worked" && !dailyLocation(day).trim());
+  if (missing) {
+    toast(`Enter a location for ${displayDate(missing.work_date)} before copying.`, "error");
+    return;
+  }
+  const invalid = days.find(day => locationValidationError(day));
+  if (invalid) {
+    toast(`${displayDate(invalid.work_date)}: ${locationValidationError(invalid)}`, "error");
+    return;
+  }
+  state.workerMonth.copy_targets = [];
+  $("#workerCopySummary").textContent = `${days.length} ${days.length === 1 ? "day" : "days"} selected from ${state.workerMonth.worker.name}. Choose every worker who shared this schedule.`;
+  $("#copyWorkerSearch").value = "";
+  renderCopyTargets();
+  $("#workerCopyDialog").showModal();
+}
+
+async function confirmWorkerCopy(event) {
+  event.preventDefault();
+  const days = selectedWorkerMonthDays();
+  const targets = state.workerMonth?.copy_targets || [];
+  if (!days.length || !targets.length) return;
+  const button = $("#confirmWorkerCopy");
+  setLoading(button, true);
+  try {
+    const result = await api("/api/worker-days/copy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_worker_id: state.workerMonth.worker.id,
+        target_worker_ids: targets.map(worker => worker.id),
+        records: days.map(workerMonthPayload)
+      })
+    });
+    $("#workerCopyDialog").close();
+    toast(`Copied ${result.days} ${result.days === 1 ? "day" : "days"} to ${result.target_workers.length} ${result.target_workers.length === 1 ? "worker" : "workers"}${result.overwritten ? ` · replaced ${result.overwritten} existing records` : ""}.`);
+    await loadWorkerMonth();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setLoading(button, false);
+  }
+}
+
 async function loadDaily() {
   const date = $("#dailyDate").value || localISO();
   const list = $("#dailyList");
@@ -836,6 +1028,7 @@ async function loadDaily() {
       existing: Boolean(worker.day_id),
       dirty: false
     }));
+    state.daily.forEach(record => hydrateLinkedLocations(record, true));
     state.daily.forEach(record => { record.saved = dailyRecordSnapshot(record); });
     const drafts = readDailyDraft(date);
     drafts.forEach(draft => {
@@ -847,6 +1040,7 @@ async function loadDaily() {
         if (record.overtime_hours == null) record.overtime_hours = derivedOvertime(record);
       }
     });
+    state.daily.forEach(record => hydrateLinkedLocations(record, true));
     state.dailyDirty = state.daily.some(item => item.dirty);
     renderDaily();
   } catch (error) {
@@ -911,7 +1105,7 @@ function syncDailyDraft() {
     extra_pay: item.extra_pay,
     start_time: item.start_time,
     end_time: item.end_time,
-    cost_centers: recordCostCenters(item).map(center => ({ ...center })),
+    cost_centers: linkedRecordCostCenters(item),
     locations: item.locations,
     notes: item.notes
   }));
@@ -939,10 +1133,14 @@ function dailyRecordPayload(item) {
     start_time: item.status === "worked" ? (item.start_time || "08:30") : "",
     end_time: item.status === "worked" ? (item.end_time || "16:30") : "",
     cost_centers: item.status === "worked"
-      ? recordCostCenters(item).map(center => ({ id: center.id, name: center.name }))
+      ? linkedRecordCostCenters(item)
       : [],
     locations: item.status === "worked"
-      ? item.locations.map(location => ({ name: location.name, hours: location.hours }))
+      ? item.locations.filter(location => location.name.trim()).map(location => ({
+          name: location.name,
+          hours: location.hours,
+          cost_centers: (location.cost_centers || []).map(center => ({ id: center.id, name: center.name }))
+        }))
       : [],
     notes: item.notes
   };
@@ -956,8 +1154,11 @@ function dailyRecordSnapshot(item) {
     extra_pay: item.extra_pay,
     start_time: item.start_time,
     end_time: item.end_time,
-    cost_centers: recordCostCenters(item).map(center => ({ ...center })),
-    locations: item.locations.map(location => ({ ...location })),
+    cost_centers: linkedRecordCostCenters(item),
+    locations: item.locations.map(location => ({
+      ...location,
+      cost_centers: (location.cost_centers || []).map(center => ({ ...center }))
+    })),
     notes: item.notes
   };
 }
@@ -982,7 +1183,7 @@ function renderDaily() {
           <button class="${record.status === "worked" ? "active worked" : ""}" data-status="worked">Worked</button>
           <button class="${record.status === "off" ? "active off" : ""}" data-status="off">Off</button>
         </div>
-        <label class="entry-field location-field"><span>Location split *</span><input data-field="location" list="locationSuggestions" value="${escapeHTML(dailyLocation(record))}" placeholder="444;111 or 432(3);1151(5)" title="Use semicolons between locations. Put optional hours in parentheses." ${disabled ? "disabled" : ""}></label>
+        <div class="linked-location-summary location-field"><span>Linked locations</span><strong>${escapeHTML(dailyLocation(record) || "Add location below")}</strong></div>
         <div class="entry-actions">
           <button class="row-save" data-save-worker ${record.dirty && record.status ? "" : "disabled"}>Save</button>
           <button class="row-copy" data-copy-worker>Copy</button>
@@ -990,9 +1191,9 @@ function renderDaily() {
           <button class="remove-row" data-clear aria-label="${record.existing ? "Discard unsaved changes" : "Clear this worker"}"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <div class="entry-details">
+          <div class="daily-linked-editor">${renderLinkedLocationEditor(record, disabled)}</div>
           <label class="entry-field"><span>Start time</span><input data-field="start_time" type="time" value="${escapeHTML(record.start_time)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field"><span>End time</span><input data-field="end_time" type="time" value="${escapeHTML(record.end_time)}" ${disabled ? "disabled" : ""}></label>
-          <div class="entry-field kind-field"><span>Cost centers</span>${renderCostCenterPicker(record, "data-field", disabled)}</div>
           <label class="entry-field"><span>Total hours</span><input data-field="total_hours" type="number" min="0" max="24" step=".25" value="${number(record.total_hours, 2)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field"><span>OT hours</span><input data-field="overtime_hours" type="number" min="0" max="16" step=".25" value="${number(record.overtime_hours, 2)}" ${disabled ? "disabled" : ""}></label>
           <label class="entry-field"><span>Extra $</span><input data-field="extra_pay" type="number" min="0" step="1" value="${number(record.extra_pay)}" ${disabled ? "disabled" : ""}></label>
@@ -1365,6 +1566,13 @@ function bindEvents() {
   });
   $("#workerMonthBody").addEventListener("change", event => {
     const row = event.target.closest("[data-month-index]");
+    if (row && event.target.matches("[data-select-worker-day]") && state.workerMonth) {
+      const day = state.workerMonth.days[Number(row.dataset.monthIndex)];
+      if (event.target.checked) state.workerMonth.selected_dates.add(day.work_date);
+      else state.workerMonth.selected_dates.delete(day.work_date);
+      updateWorkerCopyBar();
+      return;
+    }
     const field = event.target.dataset.monthField;
     if (!row || !field || !state.workerMonth) return;
     const day = state.workerMonth.days[Number(row.dataset.monthIndex)];
@@ -1387,9 +1595,24 @@ function bindEvents() {
   });
   $("#workerMonthBody").addEventListener("input", event => {
     const row = event.target.closest("[data-month-index]");
-    const field = event.target.dataset.monthField;
-    if (!row || !field || field === "status" || !state.workerMonth) return;
+    if (!row || !state.workerMonth) return;
     const day = state.workerMonth.days[Number(row.dataset.monthIndex)];
+    const linkedAction = updateLinkedLocation(day, event.target);
+    if (linkedAction) {
+      day.dirty = true;
+      syncWorkerMonthDraft();
+      if (linkedAction === "render") renderWorkerMonth();
+      else {
+        const totalInput = row.querySelector('[data-month-field="total_hours"]');
+        if (totalInput) totalInput.value = compactNumber(day.total_hours);
+        const preview = row.querySelector(".month-normalized");
+        if (preview) preview.textContent = normalizedWorkCell(day);
+        row.querySelector("[data-save-month-day]").disabled = !day.status;
+      }
+      return;
+    }
+    const field = event.target.dataset.monthField;
+    if (!field || field === "status") return;
     if (field === "cost_center_add") {
       if (!addRecordCostCenter(day, event.target.value)) return;
       day.dirty = true;
@@ -1435,6 +1658,12 @@ function bindEvents() {
     const row = event.target.closest("[data-month-index]");
     if (!row || !state.workerMonth) return;
     const day = state.workerMonth.days[Number(row.dataset.monthIndex)];
+    if (clickLinkedLocation(day, event.target)) {
+      day.dirty = true;
+      syncWorkerMonthDraft();
+      renderWorkerMonth();
+      return;
+    }
     const removeButton = event.target.closest("[data-remove-cost-center]");
     if (removeButton) {
       recordCostCenters(day).splice(Number(removeButton.dataset.removeCostCenter), 1);
@@ -1447,6 +1676,38 @@ function bindEvents() {
     if (!button) return;
     saveWorkerMonthDays([day], button);
   });
+  $("#selectFilledWorkerDays").addEventListener("click", () => {
+    if (!state.workerMonth) return;
+    state.workerMonth.days.forEach(day => {
+      if ((day.id || day.dirty) && (day.status === "off" || dailyLocation(day).trim())) {
+        state.workerMonth.selected_dates.add(day.work_date);
+      }
+    });
+    renderWorkerMonth();
+  });
+  $("#clearWorkerDays").addEventListener("click", () => {
+    if (!state.workerMonth) return;
+    state.workerMonth.selected_dates.clear();
+    renderWorkerMonth();
+  });
+  $("#openWorkerCopy").addEventListener("click", openWorkerCopyDialog);
+  $("#addCopyWorker").addEventListener("click", addCopyTarget);
+  $("#copyWorkerSearch").addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addCopyTarget();
+    }
+  });
+  $("#copyTargetList").addEventListener("click", event => {
+    const button = event.target.closest("[data-remove-copy-worker]");
+    if (!button || !state.workerMonth) return;
+    state.workerMonth.copy_targets = state.workerMonth.copy_targets.filter(
+      worker => worker.id !== Number(button.dataset.removeCopyWorker)
+    );
+    renderCopyTargets();
+  });
+  $("#workerCopyForm").addEventListener("submit", confirmWorkerCopy);
+  $$('[data-close-copy-dialog]').forEach(button => button.addEventListener("click", () => $("#workerCopyDialog").close()));
   $$(".preset-row button").forEach(button => button.addEventListener("click", () => {
     $$(".preset-row button").forEach(item => item.classList.toggle("active", item === button));
     setPreset(button.dataset.range);
@@ -1472,6 +1733,11 @@ function bindEvents() {
     const card = event.target.closest(".worker-entry");
     if (!card) return;
     const record = state.daily[Number(card.dataset.index)];
+    if (clickLinkedLocation(record, event.target)) {
+      markRecordDirty(record);
+      renderDaily();
+      return;
+    }
     if (event.target.closest("[data-copy-worker]")) {
       copyDailyWorker(record);
       return;
@@ -1526,9 +1792,23 @@ function bindEvents() {
   });
   $("#dailyList").addEventListener("input", event => {
     const card = event.target.closest(".worker-entry");
-    const field = event.target.dataset.field;
-    if (!card || !field) return;
+    if (!card) return;
     const record = state.daily[Number(card.dataset.index)];
+    const linkedAction = updateLinkedLocation(record, event.target);
+    if (linkedAction) {
+      markRecordDirty(record);
+      if (linkedAction === "render") renderDaily();
+      else {
+        const totalInput = card.querySelector('[data-field="total_hours"]');
+        if (totalInput) totalInput.value = compactNumber(record.total_hours);
+        const preview = card.querySelector(".normalized-preview code");
+        if (preview) preview.textContent = normalizedWorkCell(record);
+        card.querySelector("[data-save-worker]").disabled = !record.status;
+      }
+      return;
+    }
+    const field = event.target.dataset.field;
+    if (!field) return;
     if (field === "cost_center_add") {
       if (!addRecordCostCenter(record, event.target.value)) return;
       markRecordDirty(record);

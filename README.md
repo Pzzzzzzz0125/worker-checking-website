@@ -3,9 +3,9 @@
 Developed by Zihao (Paul) Zhao.
 
 A local web app for searching worker hours, recording new work days, and safely
-comparing Excel workbooks. The normalized
-`2026 Worker's information - normalized.xlsx` workbook is the historical-data
-source and export template.
+comparing Excel workbooks. The newest normalized or standardized worker workbook
+is the historical-data source and export template. The current corrected source
+is `2026 Worker's information - location standardized.xlsx`.
 
 ## Start the app
 
@@ -17,13 +17,14 @@ Or run:
 python3 server.py
 ```
 
-Then open [http://localhost:8000](http://localhost:8000).
+The one command starts two connected local sites:
 
 - Checking site: [http://localhost:8000](http://localhost:8000)
-- Mobile logging site: [http://localhost:8000/log](http://localhost:8000/log)
+- Mobile logging site: [http://localhost:7001](http://localhost:7001)
 
-The app has no external package dependencies. Data is stored locally in
-`data/worklog.sqlite3`.
+The app has no external package dependencies. Both sites use the same API code
+and store data in the same local `data/worklog.sqlite3` database, so a saved
+logging entry is immediately visible on the checking site.
 
 ## Main workflows
 
@@ -33,9 +34,10 @@ database. The logging page is optimized for a foreman using a phone.
 - **Overview:** search a worker by name and choose a date range to view total hours, days worked,
   locations, extra pay, daily trends, and original Excel cell text.
 - **Daily entry:** choose a date; new rows default to Worked and eight hours.
-  Enter locations with semicolons (`444;111`) or include every location's hours
-  (`432(3);1151(5)`). A live preview shows the exact Excel cell that will be
-  saved. Overtime and extra pay have separate fields. Each row
+  Add structured location rows with optional allocated hours. Every location
+  can optionally have one or several cost centers. A live preview shows
+  the exact normalized Excel cell that will be saved. Overtime and extra pay
+  have separate fields. Each row
   can be saved individually, and unsaved edits are protected as browser drafts
   across refreshes. Worked rows also record start time, end time, and a searchable
   list of one or more cost centers; times default to 8:30 AM and 4:30 PM.
@@ -43,13 +45,16 @@ database. The logging page is optimized for a foreman using a phone.
   cost-code workbook. Each worker row has Copy and Paste controls for reusing
   one worker's information on another worker on the same Daily Entry page.
 - **Mobile foreman log:** choose a date and worker, then add one or more
-  locations. Every location requires at least one cost center and can have
-  several. Worker/location/cost-center suggestions are ranked from past usage,
+  locations. Each location can optionally have one or several cost centers.
+  Worker/location/cost-center suggestions are ranked from past usage,
   and unfinished phone entries are protected as browser drafts.
 - **Worker entry:** choose one worker and one month to enter the same work
-  information across every date. New dates default to Worked and eight hours,
-  and use the same searchable multi-cost-center picker. Each day or all edited
-  days can be saved.
+  information across every date. It uses the same linked location, location-hour,
+  and multi-cost-center rows as Daily Entry. Each day or all edited days can be
+  saved. Select any combination of days, then copy them to one or more other
+  workers when a crew worked together. The confirmation step names every
+  destination worker and warns that existing entries on those dates will be
+  replaced; the copy is saved as one transaction so it cannot be half-applied.
 - **AI text entry:** paste flexible schedule notes and choose the year. After an
   explicit data-sharing confirmation, Google Gemini extracts worker/date records,
   locations, hours, overtime, times, and stated cost centers. Every proposed row

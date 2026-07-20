@@ -7,8 +7,8 @@ API and one database:
 - `log.example.com` — mobile-first foreman logging.
 - `api.example.com` — authenticated server used by both sites.
 
-They can also be deployed initially as `/` and `/log`, which is how the local
-app works now.
+Locally, the same separation is available at `localhost:8000` for checking and
+`localhost:7001` for logging. Both ports use the same API code and SQLite file.
 
 ## Production storage
 

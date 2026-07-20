@@ -27,7 +27,19 @@
           <svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
           Location check
         </button>
-        <a class="nav-item logger-nav" href="/log">
+        <button class="nav-item" data-view="ai">
+          <svg viewBox="0 0 24 24"><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z"/><path d="m18 13 .9 2.6 2.6.9-2.6.9L18 20l-.9-2.6-2.6-.9 2.6-.9L18 13ZM6 14l.7 2.1 2.1.7-2.1.7L6 19.6l-.7-2.1-2.1-.7 2.1-.7L6 14Z"/></svg>
+          AI Reading
+        </button>
+        <button class="nav-item" data-view="daily">
+          <svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="m8 15 2 2 5-5"/></svg>
+          Daily entry
+        </button>
+        <button class="nav-item" data-view="worker">
+          <svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 8h4M19 6v4"/></svg>
+          Worker entry
+        </button>
+        <a class="nav-item logger-nav" href="http://localhost:7001/" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="m8 15 2 2 5-5"/></svg>
           Open logging site
         </a>
@@ -62,10 +74,10 @@
         </div>
         <div class="top-actions">
           <span class="last-sync"><span class="status-dot"></span><span>Data through <strong id="lastRecorded">—</strong></span></span>
-          <a class="primary-button top-log-link" href="/log">
+          <button class="primary-button" data-go="daily">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
             Record today
-          </a>
+          </button>
         </div>
       </header>
 
@@ -138,7 +150,7 @@
                 <div><i class="off"></i><span>Off</span><strong id="snapshotOff">0 days</strong></div>
               </div>
             </div>
-            <a class="text-button" href="/log">Open logging site <span>→</span></a>
+            <button class="text-button" data-go="daily">Open daily entry <span>→</span></button>
           </article>
         </div>
 
@@ -359,11 +371,16 @@
           <strong id="workerMonthName"></strong>
         </div>
 
+        <div class="worker-copy-bar card" id="workerCopyBar" hidden>
+          <div><strong id="workerCopyCount">0 days selected</strong><span>Select the dates that two or more workers worked together.</span></div>
+          <div class="worker-copy-actions"><button class="ghost-button compact" id="selectFilledWorkerDays">Select filled days</button><button class="ghost-button compact" id="clearWorkerDays">Clear</button><button class="primary-button" id="openWorkerCopy" disabled>Copy to workers</button></div>
+        </div>
+
         <article class="card worker-month-card" id="workerMonthCard">
           <div class="empty-state" id="workerMonthPrompt"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg></div><h3>Choose a worker and month</h3><p>The full month will appear here for quick entry.</p></div>
           <div class="table-wrap" id="workerMonthTable" hidden>
             <table class="worker-month-table">
-              <thead><tr><th>Date</th><th>Status</th><th>Location split · use ;</th><th>Start</th><th>End</th><th>Cost center</th><th>Total</th><th>OT</th><th>Extra $</th><th></th></tr></thead>
+              <thead><tr><th>Copy</th><th>Date</th><th>Status</th><th>Locations · hours · cost centers</th><th>Start</th><th>End</th><th>Total</th><th>OT</th><th>Extra $</th><th></th></tr></thead>
               <tbody id="workerMonthBody"></tbody>
             </table>
           </div>
@@ -445,6 +462,18 @@
       <p>They will appear in the daily entry list immediately.</p>
       <label class="field"><span>Full name *</span><input id="newWorkerName" required placeholder="e.g. Maria Hernandez"></label>
       <div class="dialog-actions"><button class="ghost-button" type="button" data-close-dialog>Cancel</button><button class="primary-button" id="createWorker" type="submit">Add worker</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="workerCopyDialog">
+    <form method="dialog" class="dialog-card worker-copy-dialog" id="workerCopyForm">
+      <button class="dialog-close" type="button" data-close-copy-dialog aria-label="Close">×</button>
+      <p class="kicker">COPY WORK SCHEDULE</p><h2>Copy selected days</h2>
+      <p id="workerCopySummary">Choose one or more destination workers.</p>
+      <label class="field"><span>Add destination worker</span><div class="copy-worker-search"><input id="copyWorkerSearch" type="search" list="workerSuggestions" placeholder="Search worker name" autocomplete="off"><button class="secondary-button" type="button" id="addCopyWorker">Add</button></div></label>
+      <div class="copy-target-list" id="copyTargetList"><small>No destination workers selected.</small></div>
+      <p class="copy-warning">The selected dates, locations, hours, and connected cost centers will be saved for the source worker and copied to every destination worker. Existing records on those destination dates will be replaced.</p>
+      <div class="dialog-actions"><button class="ghost-button" type="button" data-close-copy-dialog>Cancel</button><button class="primary-button" id="confirmWorkerCopy" type="submit" disabled>Save and copy</button></div>
     </form>
   </dialog>
 

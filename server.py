@@ -3,7 +3,7 @@
 
 Run with:
     python3 server.py
-Then open http://localhost:8000
+Then open http://localhost:8000 for checking or http://localhost:7001 for logging.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import sys
 import traceback
+from threading import Thread
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from email.parser import BytesParser
@@ -48,6 +49,7 @@ DATA = ROOT / "data"
 UPLOADS = DATA / "imports"
 DB_PATH = DATA / "worklog.sqlite3"
 DEFAULT_PORT = 8000
+DEFAULT_LOG_PORT = 7001
 
 
 SCHEMA = """
@@ -206,25 +208,32 @@ def init_database() -> None:
                 inferred = re.search(r"\b(20\d{2})\b", workbooks[0].name)
                 year = int(inferred.group(1)) if inferred else date.today().year
                 import_baseline(connection, workbooks[0], year)
-        # Prefer the explicitly normalized workbook as the export template,
-        # even when this database was originally created from an older file.
-        normalized_workbooks = sorted(
+        # Prefer the newest explicitly normalized/standardized workbook as the
+        # historical source and export template, even when this database was
+        # originally created from an older file.
+        standardized_workbooks = [
             path for path in ROOT.glob("*.xlsx")
             if "worker" in path.name.casefold()
-            and "normalized" in path.name.casefold()
-        )
-        if normalized_workbooks:
-            normalized = normalized_workbooks[-1]
-            stored = UPLOADS / normalized.name
-            if normalized.resolve() != stored.resolve():
-                shutil.copy2(normalized, stored)
-            inferred = re.search(r"\b(20\d{2})\b", normalized.name)
+            and any(
+                marker in path.name.casefold()
+                for marker in ("normalized", "standardized")
+            )
+        ]
+        if standardized_workbooks:
+            standardized = max(
+                standardized_workbooks,
+                key=lambda path: path.stat().st_mtime_ns,
+            )
+            stored = UPLOADS / standardized.name
+            if standardized.resolve() != stored.resolve():
+                shutil.copy2(standardized, stored)
+            inferred = re.search(r"\b(20\d{2})\b", standardized.name)
             setting(connection, "template_path", str(stored))
             if inferred:
                 setting(connection, "workbook_year", inferred.group(1))
             sync_normalized_baseline(
                 connection,
-                normalized,
+                standardized,
                 int(inferred.group(1)) if inferred else date.today().year,
             )
         template = setting(connection, "template_path")
@@ -693,7 +702,7 @@ def save_day(
 
     cost_center_id = assigned_centers[0]["id"] if assigned_centers else ""
     cost_center_name = assigned_centers[0]["name"] if assigned_centers else ""
-    if status == "worked" and source in ("app", "ai-confirmed", "mobile-logger"):
+    if status == "worked" and source in ("app", "ai-confirmed", "mobile-logger", "worker-copy"):
         explicit_count = sum(item["hours"] is not None for item in locations)
         if 0 < explicit_count < len(locations):
             raise ValueError(
@@ -703,13 +712,6 @@ def save_day(
         if explicit_count and total_hours is not None and total_hours < explicit_total:
             raise ValueError(
                 "Total hours cannot be less than the location-hour total."
-            )
-        missing_center = next(
-            (item["name"] for item in locations if not item["cost_centers"]), None
-        )
-        if missing_center:
-            raise ValueError(
-                f"Choose at least one cost center for location {missing_center}."
             )
     original_text = payload.get("original_text", "")
     if source == "app" or not original_text:
@@ -886,7 +888,9 @@ def sync_normalized_baseline(
                 if not normalize_space(day["value"]):
                     continue
                 old = day_record(connection, worker["id"], day["date"])
-                if old and old.get("source") in ("app", "ai-confirmed"):
+                if old and old.get("source") not in (
+                    "normalized-baseline", "baseline"
+                ) and not old.get("source", "").startswith("baseline:"):
                     continue
                 parsed = parse_work_cell(day["value"]).to_dict()
                 if old:
@@ -1148,6 +1152,13 @@ class WorklogHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             parsed = urlparse(self.path)
+            logging_url = getattr(self.server, "logging_url", "")
+            if logging_url and parsed.path in ("/log", "/log/"):
+                self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
+                self.send_header("Location", logging_url)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             if parsed.path.startswith("/api/"):
                 self.handle_api_get(parsed.path, parse_qs(parsed.query))
             else:
@@ -1158,6 +1169,13 @@ class WorklogHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         parsed = urlparse(self.path)
+        logging_url = getattr(self.server, "logging_url", "")
+        if logging_url and parsed.path in ("/log", "/log/"):
+            self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
+            self.send_header("Location", logging_url)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if parsed.path.startswith("/api/"):
             self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
             return
@@ -1811,10 +1829,6 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                 if not name:
                     raise ValueError("Every location needs a name.")
                 centers = location.get("cost_centers", [])
-                if not centers:
-                    raise ValueError(
-                        f"Choose at least one cost center for location {name}."
-                    )
                 for center in centers:
                     key = normalize_space(center.get("id", ""))
                     if key and key not in seen_centers:
@@ -2039,6 +2053,74 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                 json_response(self, {"saved": len(saved), "date": selected_date})
             return
 
+        if path == "/api/worker-days/copy":
+            payload = read_json(self)
+            source_worker_id = int(payload.get("source_worker_id") or 0)
+            target_worker_ids = []
+            seen_targets = set()
+            for value in payload.get("target_worker_ids", []):
+                worker_id = int(value)
+                if worker_id != source_worker_id and worker_id not in seen_targets:
+                    target_worker_ids.append(worker_id)
+                    seen_targets.add(worker_id)
+            records = payload.get("records", [])
+            if not target_worker_ids:
+                raise ValueError("Choose at least one destination worker.")
+            if len(target_worker_ids) > 50:
+                raise ValueError("Copy to 50 workers or fewer at one time.")
+            if not records or len(records) > 31:
+                raise ValueError("Select between 1 and 31 days to copy.")
+            with connect() as connection:
+                source = connection.execute(
+                    "SELECT id, name FROM workers WHERE id=?", (source_worker_id,)
+                ).fetchone()
+                if not source:
+                    raise ValueError("Choose a valid source worker.")
+                placeholders = ",".join("?" for _ in target_worker_ids)
+                targets = connection.execute(
+                    f"SELECT id, name FROM workers WHERE id IN ({placeholders})",
+                    target_worker_ids,
+                ).fetchall()
+                if len(targets) != len(target_worker_ids):
+                    raise ValueError("One or more destination workers are invalid.")
+                target_by_id = {item["id"]: item for item in targets}
+                ordered_targets = [target_by_id[item] for item in target_worker_ids]
+                seen_dates = set()
+                normalized_records = []
+                for index, record in enumerate(records, start=1):
+                    work_date = date.fromisoformat(record.get("date", "")).isoformat()
+                    if work_date in seen_dates:
+                        raise ValueError(f"Duplicate selected date {work_date}.")
+                    seen_dates.add(work_date)
+                    if record.get("status") == "worked" and not any(
+                        normalize_space(item.get("name", ""))
+                        for item in record.get("locations", [])
+                    ):
+                        raise ValueError(f"A location is required for {work_date}.")
+                    normalized_records.append((work_date, record))
+
+                overwritten = 0
+                for work_date, record in normalized_records:
+                    save_day(
+                        connection, source_worker_id, work_date, record, "app"
+                    )
+                    for target in ordered_targets:
+                        overwritten += bool(day_record(
+                            connection, target["id"], work_date
+                        ))
+                        save_day(
+                            connection, target["id"], work_date,
+                            record, "worker-copy"
+                        )
+                json_response(self, {
+                    "source_worker": source["name"],
+                    "target_workers": [item["name"] for item in ordered_targets],
+                    "days": len(normalized_records),
+                    "saved": len(normalized_records) * len(ordered_targets),
+                    "overwritten": overwritten,
+                })
+            return
+
         if path == "/api/worker-days":
             payload = read_json(self)
             worker_id = int(payload["worker_id"])
@@ -2252,18 +2334,49 @@ class WorklogHandler(SimpleHTTPRequestHandler):
         json_response(self, {"error": "Not found"}, 404)
 
 
+class LoggingHandler(WorklogHandler):
+    """Serve the mobile logger as the root page on the dedicated log port."""
+
+    def serve_static(self, path: str) -> None:
+        if path in ("", "/", "/log", "/log/"):
+            path = "/logger.html"
+        super().serve_static(path)
+
+    def do_HEAD(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path in ("", "/", "/log", "/log/"):
+            self.path = "/logger.html"
+        super().do_HEAD()
+
+
 def main() -> None:
     init_database()
     port = int(os.environ.get("PORT", DEFAULT_PORT))
-    server = ThreadingHTTPServer(("127.0.0.1", port), WorklogHandler)
-    print(f"Speed Construction Worker Schedule is running at http://localhost:{port}")
+    log_port = int(os.environ.get("LOG_PORT", DEFAULT_LOG_PORT))
+    if port == log_port:
+        raise ValueError("PORT and LOG_PORT must be different.")
+    checking_server = ThreadingHTTPServer(("127.0.0.1", port), WorklogHandler)
+    logging_server = ThreadingHTTPServer(("127.0.0.1", log_port), LoggingHandler)
+    checking_server.logging_url = f"http://localhost:{log_port}/"
+    logging_thread = Thread(
+        target=logging_server.serve_forever,
+        name="speed-construction-logging-server",
+        daemon=True,
+    )
+    logging_thread.start()
+    print(f"Checking site is running at http://localhost:{port}")
+    print(f"Logging site is running at http://localhost:{log_port}")
+    print(f"Both sites share {DB_PATH}")
     print("Press Ctrl+C to stop.")
     try:
-        server.serve_forever()
+        checking_server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        server.server_close()
+        logging_server.shutdown()
+        checking_server.server_close()
+        logging_server.server_close()
+        logging_thread.join(timeout=2)
 
 
 if __name__ == "__main__":
