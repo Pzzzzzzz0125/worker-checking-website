@@ -1,57 +1,71 @@
-# Online deployment and data storage
+# Vercel and Lark deployment
 
-The two web experiences should be published as separate URLs while sharing one
-API and one database:
+Production uses one responsive Vercel website. Lark Base is the source of truth
+for worker, work-day, location, cost-center, payroll-check, and audit records.
+The local Python server and SQLite database remain available only for local
+development and data migration.
 
-- `check.example.com` — read-focused checking, payroll, and location reports.
-- `log.example.com` — mobile-first foreman logging.
-- `api.example.com` — authenticated server used by both sites.
+## Deployment sequence
 
-Locally, the same separation is available at `localhost:8000` for checking and
-`localhost:7001` for logging. Both ports use the same API code and SQLite file.
+1. Import the private GitHub repository into a Vercel project.
+2. Deploy once to obtain the stable production `.vercel.app` domain.
+3. Add `https://<production-domain>/api/auth/lark/callback` to the Lark custom
+   app's Security Settings. Do not use a changing preview-deployment URL.
+4. Publish the Lark app version containing the OAuth, Base, and record-change
+   permissions.
+5. Add every value from `.env.example` under Vercel Project Settings →
+   Environment Variables. Real secrets must never be committed to Git.
+6. Redeploy the production branch.
 
-## Production storage
+The first deployment intentionally displays a cloud-setup screen until the
+Lark Base adapter and environment variables are connected. The health endpoint
+is `/api/health`.
 
-Use a managed PostgreSQL database for workers, work days, locations, connected
-cost centers, payroll checks, preferences, and the audit log. SQLite remains a
-good local-development database, but a single SQLite file should not be shared
-directly by several web-server instances or downloaded to phones.
+## Authentication
 
-Store uploaded and generated Excel workbooks in private object storage, not in
-the database. The database should keep only the object key, filename, checksum,
-uploader, and timestamps. Provide downloads through short-lived signed URLs.
+`/api/auth/lark/login` starts Lark OAuth. The callback validates a signed,
+short-lived state value before exchanging the authorization code on the
+server. A successful login creates a signed, HTTP-only, SameSite=Lax session
+cookie. The Lark app secret and access tokens never enter browser JavaScript.
 
-Browser local storage should contain only temporary unsaved drafts and cached
-suggestions. The server database is the source of truth. A successful save must
-finish on the server before the UI says the entry is saved.
+The session secret must contain at least 32 random characters. Generate one
+locally with:
 
-## Accounts and permissions
+```bash
+openssl rand -hex 32
+```
 
-- **Foreman:** create and edit daily logs for permitted crews/dates.
-- **Checker/payroll:** read reports and mark payroll periods checked.
-- **Administrator:** manage workers, cost centers, imports, exports, and roles.
+Use a restricted Lark app audience and enforce server-side roles before payroll
+data is exposed. OAuth identifies the user; it does not by itself authorize
+that user to view payroll.
 
-Every production API route should require an account. Use secure cookies,
-HTTPS, server-side authorization on every request, rate limits, and a short
-session lifetime on shared phones. Keep the Gemini key and database credentials
-only in server environment secrets.
+## Lark Base tables
 
-## Reliability
+Use stable field names and do not delete or rename fields after integration.
 
-- Enable automated daily database backups and point-in-time recovery.
-- Keep the audit log for every create/update, including user ID and timestamp.
-- Use database transactions when saving a day, its locations, and their cost
-  centers so partial records cannot be created.
-- Add a unique constraint for one worker and date, as the local schema already
-  does.
-- Encrypt database and object storage at rest and use TLS in transit.
-- Test restoration from backup before inviting foremen to use the system.
+- **Workers:** stable worker key, display name, active status, W-2/1099 type,
+  daily rate, and display order.
+- **Work Days:** stable day key, linked worker, date, status, total hours,
+  start/end time, extra pay, notes, source, and timestamps.
+- **Location Entries:** linked work day, location, cost center, time range,
+  regular hours, overtime, and display order.
+- **Cost Centers:** cost-center ID, name, and active status.
+- **Payroll Checks:** worker, period start, checked status, checker, and time.
+- **Audit Log:** actor, action, entity key, old/new values, and timestamp.
 
-## Suggested migration path
+The browser never calls Lark directly. Vercel functions obtain a tenant token
+and perform Base operations server-side. Changes made through the website are
+therefore visible in the Base, and edits made in the Base are returned to the
+website on refresh. A Base-record-change webhook can invalidate cached data.
 
-1. Add authentication and roles.
-2. Move the SQLite schema and current data into PostgreSQL.
-3. Move workbook files into private object storage.
-4. Deploy the API, checking site, and logging site.
-5. Run a short pilot with one foreman and compare its payroll output against the
-   current workbook before company-wide use.
+## Migration and validation
+
+Do not upload `data/worklog.sqlite3` or payroll workbooks to GitHub. A one-time
+server-side migration will read the local SQLite database and batch-create Lark
+records after the Base schema is finalized. Validate worker counts, work-day
+counts, total hours, pay-period totals, and several individual histories before
+switching production to Lark.
+
+Keep a read-only local backup until the Lark totals and exports have been
+reconciled. Payroll output is an estimate and should be reviewed against the
+company's official workweek, worker classifications, and payroll rules.

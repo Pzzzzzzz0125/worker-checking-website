@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from "react"
 import { toast } from "sonner"
 import { AppShell, type View } from "@/components/app-shell"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api } from "@/lib/api"
+import { api, ApiError } from "@/lib/api"
 import type { Bootstrap } from "@/lib/types"
 const OverviewView=lazy(()=>import("@/views/checking").then(m=>({default:m.OverviewView})))
 const PayrollView=lazy(()=>import("@/views/checking").then(m=>({default:m.PayrollView})))
@@ -15,9 +17,10 @@ const TransferView=lazy(()=>import("@/views/data").then(m=>({default:m.TransferV
 
 const hashView=():View=>{const value=location.hash.slice(1) as View;return ["overview","payroll","locations","ai","daily","worker","transfer","review"].includes(value)?value:"overview"}
 export default function App(){
- const [view,setViewState]=useState<View>(hashView());const [bootstrap,setBootstrap]=useState<Bootstrap|null>(null)
- const load=async()=>{try{setBootstrap(await api("/api/bootstrap"))}catch(e){toast.error(e instanceof Error?e.message:"Could not connect to the database")}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
+ const [view,setViewState]=useState<View>(hashView());const [bootstrap,setBootstrap]=useState<Bootstrap|null>(null);const [bootError,setBootError]=useState<{message:string;setup:boolean}|null>(null)
+ const load=async()=>{try{setBootstrap(await api("/api/bootstrap"));setBootError(null)}catch(e){const message=e instanceof Error?e.message:"Could not connect to the database";setBootError({message,setup:e instanceof ApiError&&e.status===503});toast.error(message)}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
  const setView=(v:View)=>{location.hash=v;setViewState(v)}
+ if(bootError)return <div className="grid min-h-screen place-items-center bg-background p-5"><Card className="w-full max-w-xl"><CardHeader><img src="/logo.png" alt="Speed Construction" className="mb-3 h-12 w-fit rounded-lg"/><CardTitle>{bootError.setup?"Cloud setup in progress":"Unable to open workforce data"}</CardTitle><CardDescription>{bootError.message}</CardDescription></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">The website is deployed safely. Connect the Lark Base environment variables to enable worker, payroll, location, and entry records.</p><div className="flex flex-wrap gap-2"><a className={buttonVariants()} href="/api/auth/lark/login">Sign in with Lark</a><Button variant="secondary" onClick={()=>void load()}>Try again</Button></div></CardContent></Card></div>
  if(!bootstrap)return <div className="grid min-h-screen place-items-center bg-[#f5f7f7]"><div className="w-full max-w-md space-y-3 p-8"><Skeleton className="h-14"/><Skeleton className="h-28"/><Skeleton className="h-44"/></div></div>
  return <AppShell view={view} setView={setView} reviewCount={bootstrap.review_count}>
    <datalist id="workers">{bootstrap.workers.map(w=><option value={w.name} key={w.id}/>)}</datalist>

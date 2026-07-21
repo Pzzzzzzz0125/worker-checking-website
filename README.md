@@ -2,10 +2,10 @@
 
 Developed by Zihao (Paul) Zhao.
 
-A local web app for searching worker hours, recording new work days, and safely
-comparing Excel workbooks. The newest normalized or standardized worker workbook
-is the historical-data source and export template. The current corrected source
-is `2026 Worker's information - location standardized.xlsx`.
+A workforce web app for searching worker hours, recording work days, reviewing
+payroll, and safely comparing Excel workbooks. Local development uses SQLite;
+the production deployment is being prepared for Vercel with Lark Base storage
+and Lark OAuth login.
 
 ## Start the app
 
@@ -17,7 +17,7 @@ Or run:
 python3 server.py
 ```
 
-The one command starts two connected local sites:
+The local command starts two connected development sites:
 
 - Checking site: [http://localhost:8000](http://localhost:8000)
 - Mobile logging site: [http://localhost:7001](http://localhost:7001)
@@ -119,8 +119,8 @@ into that page; it does not send the local worker roster or database. Do not
 paste Social Security numbers, banking details, pay rates, or unrelated private
 information.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the recommended PostgreSQL, object
-storage, authentication, backup, and permission model before publishing online.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Lark Base storage, authentication,
+migration, and Vercel configuration before publishing online.
 
 ## Important data notes
 

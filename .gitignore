@@ -7,3 +7,7 @@ data/
 /*.png
 frontend/node_modules/
 frontend/*.tsbuildinfo
+.vercel/
+.env
+.env.*
+!.env.example
