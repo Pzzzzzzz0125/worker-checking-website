@@ -40,6 +40,7 @@ from xlsx_workbook import (
     read_workbook,
     read_worker_information,
     update_workbook,
+    read_payroll_workbook,
 )
 
 
@@ -48,6 +49,7 @@ STATIC = ROOT / "static"
 DATA = ROOT / "data"
 UPLOADS = DATA / "imports"
 DB_PATH = DATA / "worklog.sqlite3"
+PAYROLL_SOURCE = Path.home() / "Downloads" / "Speed Payroll.xlsx"
 DEFAULT_PORT = 8000
 DEFAULT_LOG_PORT = 7001
 
@@ -178,6 +180,21 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def payroll_profile(name: str, start: str, end: str) -> dict:
+    """Use the supplied payroll workbook's red/black marker and daily rate when present."""
+    if not PAYROLL_SOURCE.exists():
+        return {"worker_type": "W2", "daily_rate": 0.0, "notes": ""}
+    try:
+        rows = read_payroll_workbook(PAYROLL_SOURCE, int(start[:4]))
+        key = normalize_name(name)
+        matches = [r for r in rows if normalize_name(r["name"]) == key and r["from"] == start and r["to"] == end]
+        if matches:
+            return matches[-1]
+    except Exception:
+        pass
+    return {"worker_type": "W2", "daily_rate": 0.0, "notes": ""}
 
 
 def setting(connection: sqlite3.Connection, key: str, value: str | None = None) -> str | None:
@@ -344,6 +361,65 @@ def pay_period(month: str, half: str) -> tuple[date, date]:
     return date(year, month_number, 16), date(year, month_number, last_day)
 
 
+def california_overtime_by_day(
+    connection: sqlite3.Connection,
+    worker_id: int,
+    start: date,
+    end: date,
+    worker_type: str,
+) -> dict[str, dict[str, float]]:
+    """Split hours into CA regular, 1.5x, and 2x buckets.
+
+    The configured workweek is Monday-Sunday. W2 employees receive daily,
+    weekly, and seventh-day overtime treatment; 1099 records remain straight
+    time because a genuine independent contractor is not an employee.
+    """
+    first_week = start - timedelta(days=start.weekday())
+    last_week = end + timedelta(days=6 - end.weekday())
+    rows = connection.execute(
+        "SELECT work_date, COALESCE(total_hours,8) hours FROM work_days "
+        "WHERE worker_id=? AND status='worked' AND work_date BETWEEN ? AND ? "
+        "ORDER BY work_date",
+        (worker_id, first_week.isoformat(), last_week.isoformat()),
+    ).fetchall()
+    hours_by_date = {
+        date.fromisoformat(row["work_date"]): max(float(row["hours"] or 0), 0)
+        for row in rows
+    }
+    result: dict[str, dict[str, float]] = {}
+    cursor = first_week
+    while cursor <= last_week:
+        week_dates = [cursor + timedelta(days=offset) for offset in range(7)]
+        worked_dates = {day for day in week_dates if hours_by_date.get(day, 0) > 0}
+        regular_running = 0.0
+        for day in week_dates:
+            hours = hours_by_date.get(day, 0.0)
+            if not hours:
+                continue
+            if worker_type != "W2":
+                regular, overtime, doubletime = hours, 0.0, 0.0
+            elif day.weekday() == 6 and len(worked_dates) == 7:
+                regular, overtime, doubletime = 0.0, min(hours, 8.0), max(hours - 8.0, 0.0)
+            else:
+                regular = min(hours, 8.0)
+                overtime = min(max(hours - 8.0, 0.0), 4.0)
+                doubletime = max(hours - 12.0, 0.0)
+                weekly_excess = max(regular_running + regular - 40.0, 0.0)
+                if weekly_excess:
+                    regular -= weekly_excess
+                    overtime += weekly_excess
+                regular_running += regular
+            if start <= day <= end:
+                result[day.isoformat()] = {
+                    "regular_hours": round(regular, 2),
+                    "overtime_hours": round(overtime, 2),
+                    "doubletime_hours": round(doubletime, 2),
+                    "weighted_hours": round(regular + overtime * 1.5 + doubletime * 2, 2),
+                }
+        cursor += timedelta(days=7)
+    return result
+
+
 def allocate_location_hours(total_hours: float, locations: list[dict]) -> list[dict]:
     """Keep explicit hours and evenly divide the unassigned remainder."""
     if not locations:
@@ -384,7 +460,8 @@ def work_day_allocations(
         params.append(worker_id)
     rows = connection.execute(
         """
-        SELECT d.id, d.worker_id, d.work_date, COALESCE(d.total_hours, 8) total_hours,
+        SELECT d.id, d.worker_id, d.work_date, d.status, d.start_time, d.end_time,
+               d.notes, d.extra_pay, COALESCE(d.total_hours, 8) total_hours,
                w.name worker_name
         FROM work_days d JOIN workers w ON w.id=d.worker_id
         WHERE d.status='worked' AND d.work_date BETWEEN ? AND ?
@@ -435,6 +512,8 @@ def work_day_allocations(
         locations = allocate_location_hours(
             total_hours, locations_by_day.get(row["id"], [])
         )
+        for location in locations:
+            location["cost_centers"] = centers_by_location.get(location["location_id"], centers_by_day.get(row["id"], []))
         fallback_centers = centers_by_day.get(row["id"], [])
         center_totals: dict[str, dict] = {}
         for location in locations:
@@ -453,7 +532,12 @@ def work_day_allocations(
                 "worker_id": row["worker_id"],
                 "worker_name": row["worker_name"],
                 "date": row["work_date"],
+                "status": row["status"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "notes": row["notes"],
                 "total_hours": total_hours,
+                "extra_pay": float(row["extra_pay"] or 0),
                 "locations": locations,
                 "cost_centers": [
                     {**center, "hours": round(center["hours"], 2)}
@@ -702,7 +786,17 @@ def save_day(
 
     cost_center_id = assigned_centers[0]["id"] if assigned_centers else ""
     cost_center_name = assigned_centers[0]["name"] if assigned_centers else ""
-    if status == "worked" and source in ("app", "ai-confirmed", "mobile-logger", "worker-copy"):
+    if status == "worked" and source in (
+        "app", "ai-confirmed", "mobile-logger", "worker-copy", "review"
+    ):
+        locations_without_centers = [
+            item["name"] for item in locations if not item["cost_centers"]
+        ]
+        if locations_without_centers:
+            raise ValueError(
+                "Every worked location needs at least one cost center: "
+                + ", ".join(locations_without_centers)
+            )
         explicit_count = sum(item["hours"] is not None for item in locations)
         if 0 < explicit_count < len(locations):
             raise ValueError(
@@ -1179,7 +1273,9 @@ class WorklogHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
             return
-        path = "/index.html" if parsed.path in ("", "/") else parsed.path
+        path = "/app-ui/index.html" if parsed.path in ("", "/") else parsed.path
+        if path in ("/legacy", "/legacy/"):
+            path = "/index.html"
         if path in ("/log", "/log/"):
             path = "/logger.html"
         target = (STATIC / path.lstrip("/")).resolve()
@@ -1207,6 +1303,8 @@ class WorklogHandler(SimpleHTTPRequestHandler):
 
     def serve_static(self, path: str) -> None:
         if path in ("", "/"):
+            path = "/app-ui/index.html"
+        elif path in ("/legacy", "/legacy/"):
             path = "/index.html"
         elif path in ("/log", "/log/"):
             path = "/logger.html"
@@ -1481,10 +1579,28 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                 }
                 for center in centers:
                     center["worker_count"] = center_counts.get(center["id"], 0)
+                profile = payroll_profile(worker["name"], start_day.isoformat(), end_day.isoformat())
+                rate = float(profile.get("daily_rate") or 0)
+                overtime_by_day = california_overtime_by_day(
+                    connection, worker_id, start_day, end_day, profile.get("worker_type", "1099")
+                )
+                days = []
+                for day in selected_days:
+                    day = dict(day)
+                    breakdown = overtime_by_day.get(day["date"], {
+                        "regular_hours": day["total_hours"], "overtime_hours": 0,
+                        "doubletime_hours": 0, "weighted_hours": day["total_hours"],
+                    })
+                    day.update(breakdown)
+                    day["estimated_salary"] = round(
+                        float(day["weighted_hours"]) * rate / 8.0
+                        + float(day.get("extra_pay") or 0), 2
+                    )
+                    days.append(day)
                 json_response(
                     self,
                     {
-                        "worker": dict(worker),
+                        "worker": {**dict(worker), **profile},
                         "period": {
                             "from": start_day.isoformat(),
                             "to": end_day.isoformat(),
@@ -1493,8 +1609,14 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                         },
                         "totals": {
                             "hours": round(sum(day["total_hours"] for day in selected_days), 2),
+                            "regular_hours": round(sum(day["regular_hours"] for day in days), 2),
+                            "overtime_hours": round(sum(day["overtime_hours"] for day in days), 2),
+                            "doubletime_hours": round(sum(day["doubletime_hours"] for day in days), 2),
+                            "weighted_hours": round(sum(day["weighted_hours"] for day in days), 2),
                             "days": len(selected_days),
+                            "estimated_salary": round(sum(day["estimated_salary"] for day in days), 2),
                         },
+                        "days": days,
                         "locations": locations,
                         "cost_centers": centers,
                     },
@@ -1524,6 +1646,7 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                     raise ValueError(f"No location matches {requested}.")
                 location_name = matched["name"]
                 worker_totals: dict[int, dict] = {}
+                center_totals: dict[str, dict] = {}
                 all_dates = set()
                 for day in work_day_allocations(connection, start, end):
                     allocated = [
@@ -1544,6 +1667,11 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                     item["hours"] += sum(float(part["hours"]) for part in allocated)
                     item["dates"].add(day["date"])
                     all_dates.add(day["date"])
+                    for location_item in allocated:
+                        for center in location_item.get("cost_centers", []):
+                            share = float(location_item["hours"]) / max(len(location_item.get("cost_centers", [])), 1)
+                            agg = center_totals.setdefault(center["id"], {**center, "hours": 0.0, "dates": set(), "worker_ids": set()})
+                            agg["hours"] += share; agg["dates"].add(day["date"]); agg["worker_ids"].add(day["worker_id"])
                 workers = []
                 for item in worker_totals.values():
                     dates = sorted(item.pop("dates"))
@@ -1557,6 +1685,11 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                     )
                     workers.append(item)
                 workers.sort(key=lambda item: (-item["hours"], item["worker_name"].casefold()))
+                cost_centers = []
+                for item in center_totals.values():
+                    dates = sorted(item.pop("dates")); item["worker_count"] = len(item.pop("worker_ids")); item["hours"] = round(item["hours"], 2); item["days"] = len(dates)
+                    item["first_date"] = dates[0] if dates else None; item["last_date"] = dates[-1] if dates else None; cost_centers.append(item)
+                cost_centers.sort(key=lambda item: (-item["hours"], item["name"].casefold()))
                 sorted_dates = sorted(all_dates)
                 json_response(
                     self,
@@ -1571,6 +1704,7 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                             "last_date": sorted_dates[-1] if sorted_dates else None,
                         },
                         "workers": workers,
+                        "cost_centers": cost_centers,
                     },
                 )
             return
@@ -1601,7 +1735,27 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                     """,
                     (start_day.isoformat(), end_day.isoformat(), start_day.isoformat()),
                 ).fetchall()
-                workers = [dict(row) for row in rows]
+                workers = []
+                for row in rows:
+                    item = dict(row)
+                    profile = payroll_profile(item["worker_name"], start_day.isoformat(), end_day.isoformat())
+                    item.update(profile)
+                    rate = float(item.get("daily_rate") or 0)
+                    parts = list(california_overtime_by_day(
+                        connection, item["worker_id"], start_day, end_day, item["worker_type"]
+                    ).values())
+                    item["regular_hours"] = round(sum(part["regular_hours"] for part in parts), 2)
+                    item["overtime_hours"] = round(sum(part["overtime_hours"] for part in parts), 2)
+                    item["doubletime_hours"] = round(sum(part["doubletime_hours"] for part in parts), 2)
+                    item["weighted_hours"] = round(sum(part["weighted_hours"] for part in parts), 2)
+                    item["regular_salary"] = round(item["regular_hours"] * rate / 8.0, 2)
+                    item["overtime_salary"] = round(
+                        (item["overtime_hours"] * 1.5 + item["doubletime_hours"] * 2) * rate / 8.0, 2
+                    )
+                    item["estimated_salary"] = round(
+                        item["weighted_hours"] * rate / 8.0 + float(item["extra_pay"] or 0), 2
+                    )
+                    workers.append(item)
                 worked = [item for item in workers if item["worked_days"]]
                 json_response(
                     self,
@@ -1614,6 +1768,7 @@ class WorklogHandler(SimpleHTTPRequestHandler):
                         },
                         "totals": {
                             "hours": round(sum(float(item["hours"]) for item in workers), 2),
+                            "estimated_salary": round(sum(float(item["estimated_salary"]) for item in workers), 2),
                             "workers": len(worked),
                             "checked": len([item for item in workers if item["checked"]]),
                         },

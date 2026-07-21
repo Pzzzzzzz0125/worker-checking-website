@@ -22,9 +22,23 @@ The one command starts two connected local sites:
 - Checking site: [http://localhost:8000](http://localhost:8000)
 - Mobile logging site: [http://localhost:7001](http://localhost:7001)
 
-The app has no external package dependencies. Both sites use the same API code
-and store data in the same local `data/worklog.sqlite3` database, so a saved
-logging entry is immediately visible on the checking site.
+The Python server has no external package dependencies. Both sites use the same
+API code and store data in the same local `data/worklog.sqlite3` database, so a
+saved logging entry is immediately visible on the checking site.
+
+The main interface is built with React, TypeScript, Tailwind CSS, shadcn-style
+components, TanStack Table, Recharts, React Hook Form, Zod, and Lucide icons.
+Its compiled production files are committed in `static/app-ui`, so Node.js is
+not required just to run the app. To change and rebuild the frontend:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+The previous vanilla interface remains available at
+[http://localhost:8000/legacy](http://localhost:8000/legacy) as a fallback.
 
 ## Main workflows
 

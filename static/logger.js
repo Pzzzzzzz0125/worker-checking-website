@@ -120,8 +120,8 @@ function renderLocations() {
         <label><span>Hours <small>(optional)</small></span><input data-location-hours type="number" min="0" max="24" step=".25" value="${location.hours == null ? "" : compact(location.hours)}" placeholder="Auto"></label>
         <button type="button" class="remove-location" data-remove-location aria-label="Remove location">×</button>
       </div>
-      <div class="cost-area"><span>Cost center(s) for this location <small>(optional)</small></span>
-        <div class="selected-centers">${selected || '<small>No cost center selected</small>'}</div>
+      <div class="cost-area"><span>Cost center(s) for this location <small>(required)</small></span>
+        <div class="selected-centers">${selected || '<small>Select at least one cost center</small>'}</div>
         <input class="cost-search" data-center-search list="loggerCostCenters" placeholder="Search cost center name or ID" autocomplete="off">
         <div class="quick-centers">${suggestions ? '<span class="quick-label">Frequently used here</span>' + suggestions : ""}</div>
       </div>
@@ -199,6 +199,8 @@ function validate() {
   if (state.record.status === "off") return "";
   const locations = state.record.locations.filter(item => item.name.trim());
   if (!locations.length) return "Add at least one location.";
+  const missingCenter = locations.find(item => !item.cost_centers.length);
+  if (missingCenter) return `Choose a cost center for ${missingCenter.name || "each location"}.`;
   const explicit = locations.filter(item => item.hours != null).length;
   if (explicit && explicit !== locations.length) return "Enter hours for every location, or leave every location hour blank.";
   return "";

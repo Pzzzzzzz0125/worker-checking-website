@@ -108,6 +108,57 @@ def sheet_rows(
     return output
 
 
+def read_payroll_workbook(path: str | Path, year: int) -> list[dict]:
+    """Read the half-month payroll sheets, including the red/black worker marker."""
+    output = []
+    with ZipFile(path) as archive:
+        shared = _shared_strings(archive)
+        style_colors = {}
+        if "xl/styles.xml" in archive.namelist():
+            styles = ET.fromstring(archive.read("xl/styles.xml"))
+            fonts = styles.findall("m:fonts/m:font", NS)
+            for idx, xf in enumerate(styles.findall("m:cellXfs/m:xf", NS)):
+                font_id = int(xf.attrib.get("fontId", 0))
+                colors = fonts[font_id].findall("m:color", NS) if font_id < len(fonts) else []
+                style_colors[str(idx)] = (colors[0].attrib.get("rgb", "") if colors else "").upper()
+        for sheet_name, sheet_path in workbook_sheets(archive):
+            match = re.match(r"\s*(\d{1,2})\.(\d{1,2})\s+to\s+(\d{1,2})\.(\d{1,2})", sheet_name)
+            if not match:
+                continue
+            sm, sd, em, ed = map(int, match.groups())
+            start = date(year, sm, sd).isoformat()
+            end = date(year, em, ed).isoformat()
+            rows = sheet_rows(archive, sheet_path, shared)
+            if not rows:
+                continue
+            headers = {normalize_sheet_name(v).casefold(): c for c, v in rows[0].items()}
+            name_col = next((c for k, c in headers.items() if "worker" in k or k == "name"), 1)
+            rate_col = next((c for k, c in headers.items() if "daily" in k and "salary" in k), None)
+            ot_col = next((c for k, c in headers.items() if k in ("overtime", "ot hours", "overtime hours")), None)
+            notes_col = next((c for k, c in headers.items() if "note" in k), None)
+            # Re-read styles for the worker-name cells; red denotes 1099 in this workbook.
+            xml = ET.fromstring(archive.read(sheet_path))
+            xml_rows = xml.findall("m:sheetData/m:row", NS)
+            for index, row in enumerate(rows[1:]):
+                name = normalize_sheet_name(row.get(name_col, ""))
+                if not name:
+                    continue
+                style = ""
+                if index + 1 < len(xml_rows):
+                    cell = next((c for c in xml_rows[index + 1].findall("m:c", NS) if column_number(c.attrib.get("r", "")) == name_col), None)
+                    style = cell.attrib.get("s", "") if cell is not None else ""
+                # Speed Payroll convention: red names are W2; black names are 1099.
+                worker_type = "W2" if style_colors.get(style, "").endswith("F54A45") else "1099"
+                def number(value):
+                    try: return float(str(value).replace(",", "").replace("$", ""))
+                    except (TypeError, ValueError): return 0.0
+                output.append({"name": name, "from": start, "to": end, "worker_type": worker_type,
+                               "daily_rate": number(row.get(rate_col, 0)) if rate_col else 0.0,
+                               "overtime_hours": number(row.get(ot_col, 0)) if ot_col else 0.0,
+                               "notes": normalize_sheet_name(row.get(notes_col, "")) if notes_col else ""})
+    return output
+
+
 def parse_header_date(header: str, year: int) -> date | None:
     match = re.search(r"(?<!\d)(\d{1,2})\s*/\s*(\d{1,2})(?!\d)", header or "")
     if not match:
