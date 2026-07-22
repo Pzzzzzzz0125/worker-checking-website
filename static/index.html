@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speed Construction · Checking</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Speed Construction Worker Schedule home">
+        <img class="company-logo" src="/assets/speed-construction-logo.png" alt="Speed Construction">
+        <small>Worker Schedule</small>
+      </a>
+
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="overview">
+          <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+          Overview
+        </button>
+        <button class="nav-item" data-view="payroll">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 10h8M8 14h4"/><path d="M16 14h.01"/></svg>
+          Payroll check
+        </button>
+        <button class="nav-item" data-view="locations">
+          <svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+          Location check
+        </button>
+        <button class="nav-item" data-view="ai">
+          <svg viewBox="0 0 24 24"><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z"/><path d="m18 13 .9 2.6 2.6.9-2.6.9L18 20l-.9-2.6-2.6-.9 2.6-.9L18 13ZM6 14l.7 2.1 2.1.7-2.1.7L6 19.6l-.7-2.1-2.1-.7 2.1-.7L6 14Z"/></svg>
+          AI Reading
+        </button>
+        <button class="nav-item" data-view="daily">
+          <svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="m8 15 2 2 5-5"/></svg>
+          Daily entry
+        </button>
+        <button class="nav-item" data-view="worker">
+          <svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M17 8h4M19 6v4"/></svg>
+          Worker entry
+        </button>
+        <a class="nav-item logger-nav" href="http://localhost:7001/" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="m8 15 2 2 5-5"/></svg>
+          Open logging site
+        </a>
+        <button class="nav-item" data-view="transfer">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 13v7h14v-7"/></svg>
+          Import & export
+        </button>
+        <button class="nav-item" data-view="review">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 4.5 3.5 17a2 2 0 0 0 1.8 3h13.4a2 2 0 0 0 1.8-3L13.7 4.5a2 2 0 0 0-3.4 0Z"/></svg>
+          Needs review
+          <span class="nav-badge" id="reviewBadge">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <p class="developer-credit">Developed by<br><strong>Zihao (Paul) Zhao</strong></p>
+        <div class="system-status">
+          <span class="status-dot"></span>
+          <span><strong>Checking site</strong><small>Shared schedule data</small></span>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Open navigation">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="topbar-copy">
+          <p id="eyebrow">WORKFORCE OVERVIEW</p>
+          <h1 id="pageTitle">Hours at a glance</h1>
+        </div>
+        <div class="top-actions">
+          <span class="last-sync"><span class="status-dot"></span><span>Data through <strong id="lastRecorded">—</strong></span></span>
+          <button class="primary-button" data-go="daily">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            Record today
+          </button>
+        </div>
+      </header>
+
+      <section class="view active" id="overviewView">
+        <div class="toolbar card">
+          <label class="field grow">
+            <span>Search worker</span>
+            <span class="worker-search">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+              <input type="search" id="workerFilter" list="workerSuggestions" placeholder="All workers — type a name" autocomplete="off">
+              <datalist id="workerSuggestions"></datalist>
+              <datalist id="costCenterSuggestions"></datalist>
+            </span>
+          </label>
+          <label class="field">
+            <span>From</span>
+            <input type="date" id="rangeFrom">
+          </label>
+          <label class="field">
+            <span>To</span>
+            <input type="date" id="rangeTo">
+          </label>
+          <button class="primary-button filter-button" id="applyFilter">View hours</button>
+          <div class="preset-row" aria-label="Date range presets">
+            <button data-range="pay1">Pay: 1–15</button>
+            <button data-range="pay2">Pay: 16–end</button>
+            <button class="active" data-range="month">This month</button>
+            <button data-range="183">6 months</button>
+            <button data-range="year">This year</button>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card">
+            <div class="stat-icon amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></div>
+            <div><p>Total hours</p><strong id="totalHours">0</strong><small>in selected range</small></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-icon blue"><svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM17 8h4M19 6v4"/></svg></div>
+            <div><p>Active workers</p><strong id="activeWorkers">0</strong><small>with recorded hours</small></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-icon green"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h3M8 16h8"/></svg></div>
+            <div><p>Work days</p><strong id="workedDays">0</strong><small>worker-day entries</small></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-icon violet"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M15 9.5c-.5-.8-1.5-1.3-2.8-1.3-1.5 0-2.7.7-2.7 1.8 0 2.8 5.5 1.2 5.5 4 0 1.1-1.2 1.8-2.8 1.8-1.3 0-2.5-.5-3.2-1.4M12 6.5v11"/></svg></div>
+            <div><p>Additional pay</p><strong id="extraPay">$0</strong><small>beyond base hours</small></div>
+          </article>
+        </div>
+
+        <div class="overview-grid">
+          <article class="card chart-card">
+            <div class="card-heading">
+              <div><p class="kicker">HOURS TREND</p><h2>Daily workload</h2></div>
+              <span class="legend"><i></i> Recorded hours</span>
+            </div>
+            <div class="bar-chart" id="hoursChart">
+              <div class="empty-state small"><p>No records in this range.</p></div>
+            </div>
+          </article>
+          <article class="card snapshot-card">
+            <div class="card-heading">
+              <div><p class="kicker">QUICK SNAPSHOT</p><h2 id="snapshotTitle">This month</h2></div>
+            </div>
+            <div class="donut-wrap">
+              <div class="donut" id="workDonut"><span id="averageHours">0<small>avg hrs</small></span></div>
+              <div class="donut-copy">
+                <div><i class="worked"></i><span>Worked</span><strong id="snapshotWorked">0 days</strong></div>
+                <div><i class="off"></i><span>Off</span><strong id="snapshotOff">0 days</strong></div>
+              </div>
+            </div>
+            <button class="text-button" data-go="daily">Open daily entry <span>→</span></button>
+          </article>
+        </div>
+
+        <article class="card records-card">
+          <div class="card-heading records-heading">
+            <div><p class="kicker">WORK HISTORY</p><h2>Daily records</h2></div>
+            <label class="search-box">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+              <input type="search" id="recordSearch" placeholder="Search worker, location, cost center, or note">
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Worker</th><th>Status</th><th>Location</th><th>Work time</th><th>Cost center</th><th>Hours</th><th>Original entry</th></tr></thead>
+              <tbody id="recordsBody"></tbody>
+            </table>
+            <div class="empty-state" id="recordsEmpty" hidden>
+              <div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg></div>
+              <h3>No records found</h3><p>Try another date range or record a work day.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="view" id="payrollView">
+        <div class="payroll-toolbar card">
+          <div>
+            <p class="kicker">HALF-MONTH PAYROLL</p>
+            <h2>Choose a pay period</h2>
+            <p>Review recorded hours and mark each worker after checking the period.</p>
+          </div>
+          <div class="field payroll-month">
+            <span>Select month</span>
+            <div class="month-stepper">
+              <button type="button" data-pay-month="-1" aria-label="Previous month">‹</button>
+              <input type="month" id="payrollMonth">
+              <button type="button" data-pay-month="1" aria-label="Next month">›</button>
+            </div>
+          </div>
+          <div class="payroll-half" aria-label="Pay period">
+            <button class="active" data-half="1">1–15</button>
+            <button data-half="2">16–end</button>
+          </div>
+        </div>
+
+        <div class="stats-grid payroll-stats">
+          <article class="stat-card">
+            <div class="stat-icon blue"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></div>
+            <div><p>Total hours</p><strong class="priority-total" id="payrollHours">0</strong><small id="payrollPeriodLabel">including overtime</small></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-icon green"><svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg></div>
+            <div><p>Workers</p><strong id="payrollWorkers">0</strong><small>with recorded work</small></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg></div>
+            <div><p>Checked</p><strong id="payrollChecked">0 / 0</strong><small>workers reviewed</small></div>
+          </article>
+        </div>
+
+        <article class="card payroll-card">
+          <div class="card-heading records-heading">
+            <div><p class="kicker">PAYROLL BREAKDOWN</p><h2 id="payrollTableTitle">Period details</h2></div>
+            <label class="search-box">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+              <input type="search" id="payrollWorkerSearch" placeholder="Search worker name">
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table class="payroll-table">
+              <thead><tr><th>Checked</th><th>Worker</th><th>Hours</th><th>OT hours</th><th>Days worked</th><th>Extra pay</th></tr></thead>
+              <tbody id="payrollBody"></tbody>
+            </table>
+            <div class="empty-state" id="payrollEmpty" hidden><h3>No payroll records</h3><p>No work has been recorded for this period.</p></div>
+          </div>
+        </article>
+
+        <article class="card payroll-detail-card" id="payrollWorkerDetail" hidden>
+          <div class="card-heading">
+            <div><p class="kicker">WORKER PERIOD DETAIL</p><h2 id="payrollDetailTitle">Worker details</h2><p id="payrollDetailPeriod"></p></div>
+            <button class="ghost-button compact" id="closePayrollDetail">Close</button>
+          </div>
+          <div class="detail-summary" id="payrollDetailSummary"></div>
+          <div class="detail-grid">
+            <section>
+              <h3>Hours by location</h3>
+              <div class="table-wrap"><table class="detail-table"><thead><tr><th>Location</th><th>Hours</th><th>Days</th><th>First–last work date</th></tr></thead><tbody id="payrollLocationDetailBody"></tbody></table></div>
+              <div class="empty-state small" id="payrollLocationDetailEmpty" hidden><p>No location information in this period.</p></div>
+            </section>
+            <section>
+              <h3>Hours by cost center</h3>
+              <div class="table-wrap"><table class="detail-table"><thead><tr><th>Cost center</th><th>Hours</th><th>Days</th><th>Workers in period</th></tr></thead><tbody id="payrollCostCenterDetailBody"></tbody></table></div>
+              <div class="empty-state small" id="payrollCostCenterDetailEmpty" hidden><p>No cost center information in this period.</p></div>
+            </section>
+          </div>
+          <p class="allocation-note">When hours are not assigned to an individual location or cost center, the day's total hours are divided evenly and rounded to two decimals.</p>
+        </article>
+      </section>
+
+      <section class="view" id="locationsView">
+        <div class="location-toolbar card">
+          <div><p class="kicker">LOCATION HISTORY</p><h2>Check a work location</h2><p>See who worked at a location, their allocated hours, days, and work-date range.</p></div>
+          <label class="field location-search-field"><span>Location</span><input type="search" id="locationSearch" list="locationSuggestions" placeholder="Type a location" autocomplete="off"><datalist id="locationSuggestions"></datalist></label>
+          <label class="field"><span>From</span><input type="date" id="locationFrom"></label>
+          <label class="field"><span>To</span><input type="date" id="locationTo"></label>
+          <button class="primary-button" id="loadLocationDetail">View location</button>
+        </div>
+
+        <div class="stats-grid location-stats" id="locationStats" hidden>
+          <article class="stat-card"><div class="stat-icon green"><svg viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg></div><div><p>Workers</p><strong id="locationWorkerCount">0</strong><small>worked here</small></div></article>
+          <article class="stat-card"><div class="stat-icon blue"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></div><div><p>Allocated hours</p><strong id="locationHours">0</strong><small>at this location</small></div></article>
+          <article class="stat-card"><div class="stat-icon amber"><svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg></div><div><p>Work days</p><strong id="locationDays">0</strong><small>distinct dates</small></div></article>
+          <article class="stat-card"><div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="M5 12h14M5 12l4-4m-4 4 4 4M19 12l-4-4m4 4-4 4"/></svg></div><div><p>Work range</p><strong class="date-range-total" id="locationDateRange">—</strong><small>first to last recorded day</small></div></article>
+        </div>
+
+        <article class="card location-results-card" id="locationResults" hidden>
+          <div class="card-heading"><div><p class="kicker">WORKERS AT LOCATION</p><h2 id="locationResultTitle">Location details</h2><p id="locationResultRange"></p></div></div>
+          <div class="table-wrap"><table class="location-table"><thead><tr><th>Worker</th><th>Hours</th><th>Days</th><th>First work date</th><th>Last work date</th></tr></thead><tbody id="locationWorkersBody"></tbody></table></div>
+          <div class="empty-state" id="locationWorkersEmpty" hidden><h3>No work found</h3><p>No workers were recorded at this location in the selected range.</p></div>
+          <p class="allocation-note">Unspecified daily hours are divided evenly across that day's locations. For example: one location = 8 hours, two = 4 each, three = 2.67 each when the day total is 8.</p>
+        </article>
+      </section>
+
+      <section class="view" id="aiView">
+        <div class="ai-entry-grid">
+          <article class="card ai-compose-card">
+            <div class="ai-heading">
+              <div class="feature-icon ai"><svg viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg></div>
+              <div><p class="kicker">GEMINI ASSISTED ENTRY</p><h2>Paste work information</h2><p>Gemini will identify workers, dates, locations, hours, overtime, and any stated cost centers.</p></div>
+            </div>
+            <label class="field ai-text-field"><span>Work information</span><textarea id="aiSourceText" maxlength="50000" placeholder="Example:&#10;07/01 Cristian and Eduardo&#10;16970 Cypress Way&#10;&#10;07/02 Cristian and Eduardo 1049 Woodland Ave"></textarea></label>
+            <label class="ai-consent"><input type="checkbox" id="aiConsent"><span>I understand that the pasted text will be sent to Google Gemini for analysis. I will not include Social Security numbers, pay rates, banking details, or other unnecessary sensitive information.</span></label>
+            <div class="ai-compose-actions">
+              <label class="field"><span>Year for dates without a year</span><input type="number" id="aiEntryYear" min="2020" max="2100"></label>
+              <button class="primary-button large" id="analyzeWithAI">Analyze with Gemini</button>
+            </div>
+            <p class="ai-safety-note"><strong>Review required:</strong> Gemini cannot save directly. Every extracted row is shown below for checking and editing before confirmation.</p>
+          </article>
+
+          <aside class="card ai-guide-card">
+            <p class="kicker">WHAT AI CAN READ</p>
+            <h3>Flexible text formats</h3>
+            <ul>
+              <li>One date with one or several worker names</li>
+              <li>A worker name before or after a block of dated lines</li>
+              <li>Addresses, site numbers, and multiple locations</li>
+              <li>Total hours, overtime, start/end times, and off status</li>
+            </ul>
+            <p>Unclear matches are flagged instead of silently saved.</p>
+          </aside>
+        </div>
+
+        <article class="card ai-review-card" id="aiReviewCard" hidden>
+          <div class="card-heading ai-review-heading">
+            <div><p class="kicker">HUMAN REVIEW</p><h2>Check Gemini's extracted records</h2><p id="aiReviewSummary"></p></div>
+            <div class="selection-actions"><button class="ghost-button compact" id="selectReadyAI">Select ready</button><button class="ghost-button compact" id="clearAISelection">Clear selection</button></div>
+          </div>
+          <div class="ai-global-warnings" id="aiGlobalWarnings" hidden></div>
+          <div class="ai-review-list" id="aiReviewList"></div>
+          <div class="sticky-save ai-confirm-bar">
+            <div><strong id="aiSelectedLabel">No records selected</strong><span>Selected records will update the local database only after confirmation.</span></div>
+            <button class="primary-button large" id="confirmAIRecords">Confirm and save selected</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="view" id="dailyView">
+        <div class="daily-header">
+          <div>
+            <p class="section-intro">Workers default to Worked with 8 hours. Add a location and one or more cost centers as needed.</p>
+          </div>
+          <div class="daily-tools">
+            <label class="date-picker-large">
+              <span>Find worker</span>
+              <span class="worker-search">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                <input type="search" id="dailyWorkerSearch" placeholder="Search by worker name">
+              </span>
+            </label>
+            <label class="date-picker-large">
+              <span>Work date</span>
+              <input type="date" id="dailyDate">
+            </label>
+          </div>
+        </div>
+        <div class="daily-summary card">
+          <div><span class="summary-number" id="dailyWorkedCount">0</span><span>working</span></div>
+          <div><span class="summary-number muted" id="dailyOffCount">0</span><span>off</span></div>
+          <div><span class="summary-number" id="dailyHoursCount">0</span><span>total hours</span></div>
+          <button class="ghost-button" id="markAllOff">Mark new entries as off</button>
+        </div>
+        <div class="worker-entry-list" id="dailyList"></div>
+        <div class="sticky-save">
+          <div><strong id="unsavedLabel">No unsaved changes</strong><span>Records are stored locally and included in your next export.</span></div>
+          <button class="primary-button large" id="saveDay">
+            <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5V4Z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>
+            Save work day
+          </button>
+        </div>
+      </section>
+
+      <section class="view" id="workerView">
+        <div class="worker-month-toolbar card">
+          <div>
+            <p class="kicker">ONE WORKER · MANY DAYS</p>
+            <h2>Worker entry</h2>
+            <p>Select one worker and fill their work information across a month.</p>
+          </div>
+          <label class="field worker-month-person"><span>Worker</span><input type="search" id="workerMonthSearch" list="workerSuggestions" placeholder="Type a worker name" autocomplete="off"></label>
+          <div class="field worker-month-picker"><span>Month</span><div class="month-stepper"><button type="button" data-worker-month="-1" aria-label="Previous month">‹</button><input type="month" id="workerMonth"><button type="button" data-worker-month="1" aria-label="Next month">›</button></div></div>
+          <button class="primary-button" id="loadWorkerMonth">Open month</button>
+        </div>
+
+        <div class="daily-summary card worker-month-summary" id="workerMonthSummary" hidden>
+          <div><span class="summary-number" id="workerMonthWorked">0</span><span>days worked</span></div>
+          <div><span class="summary-number" id="workerMonthHours">0</span><span>total hours</span></div>
+          <div><span class="summary-number muted" id="workerMonthUnsaved">0</span><span>unsaved days</span></div>
+          <strong id="workerMonthName"></strong>
+        </div>
+
+        <div class="worker-copy-bar card" id="workerCopyBar" hidden>
+          <div><strong id="workerCopyCount">0 days selected</strong><span>Select the dates that two or more workers worked together.</span></div>
+          <div class="worker-copy-actions"><button class="ghost-button compact" id="selectFilledWorkerDays">Select filled days</button><button class="ghost-button compact" id="clearWorkerDays">Clear</button><button class="primary-button" id="openWorkerCopy" disabled>Copy to workers</button></div>
+        </div>
+
+        <article class="card worker-month-card" id="workerMonthCard">
+          <div class="empty-state" id="workerMonthPrompt"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/></svg></div><h3>Choose a worker and month</h3><p>The full month will appear here for quick entry.</p></div>
+          <div class="table-wrap" id="workerMonthTable" hidden>
+            <table class="worker-month-table">
+              <thead><tr><th>Copy</th><th>Date</th><th>Status</th><th>Locations · hours · cost centers</th><th>Start</th><th>End</th><th>Total</th><th>OT</th><th>Extra $</th><th></th></tr></thead>
+              <tbody id="workerMonthBody"></tbody>
+            </table>
+          </div>
+        </article>
+        <div class="sticky-save worker-month-save" id="workerMonthSaveBar" hidden>
+          <div><strong id="workerMonthSaveLabel">No unsaved changes</strong><span>Save one date at a time or save every edited date together.</span></div>
+          <button class="primary-button large" id="saveWorkerMonth">Save edited days</button>
+        </div>
+      </section>
+
+      <section class="view" id="transferView">
+        <div class="transfer-grid">
+          <article class="card import-card">
+            <div class="feature-icon upload"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 13v7h14v-7"/></svg></div>
+            <p class="kicker">SAFE IMPORT</p>
+            <h2>Compare a newer workbook</h2>
+            <p>Upload a human-edited copy. Nothing is overwritten until you review and approve each difference.</p>
+            <label class="drop-zone" id="dropZone">
+              <input type="file" id="workbookFile" accept=".xlsx,.xlsm" hidden>
+              <svg viewBox="0 0 24 24"><path d="M12 16V5m0 0L8 9m4-4 4 4M5 15v4h14v-4"/></svg>
+              <strong>Drop an Excel file here</strong>
+              <span>or click to choose .xlsx</span>
+              <em id="selectedFile">No file selected</em>
+            </label>
+            <div class="import-actions">
+              <label class="field"><span>Workbook year</span><input type="number" id="importYear" min="2020" max="2100"></label>
+              <button class="primary-button" id="analyzeImport">Compare workbook</button>
+            </div>
+          </article>
+
+          <article class="card export-card">
+            <div class="feature-icon download"><svg viewBox="0 0 24 24"><path d="M12 4v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg></div>
+            <p class="kicker">EXCEL EXPORT</p>
+            <h2>Download an updated copy</h2>
+            <p>The original workbook structure, formatting, reference tabs, and parent-item columns are retained.</p>
+            <div class="export-fields">
+              <label class="field"><span>From</span><input type="date" id="exportFrom"></label>
+              <label class="field"><span>To</span><input type="date" id="exportTo"></label>
+            </div>
+            <button class="secondary-button wide" id="downloadExport">
+              <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>
+              Download Excel workbook
+            </button>
+            <div class="preserve-note">
+              <svg viewBox="0 0 24 24"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+              Existing non-work-log sheets are preserved
+            </div>
+          </article>
+        </div>
+
+        <article class="card comparison-card" id="comparisonCard" hidden>
+          <div class="card-heading">
+            <div><p class="kicker">IMPORT COMPARISON</p><h2>Review proposed changes</h2><p id="comparisonSummary"></p></div>
+            <div class="selection-actions"><button class="ghost-button compact" id="selectSafe">Select safe changes</button><button class="primary-button" id="applySelected">Apply selected</button></div>
+          </div>
+          <div class="comparison-list" id="comparisonList"></div>
+        </article>
+
+        <article class="card import-history-card">
+          <div class="card-heading"><div><p class="kicker">AUDIT TRAIL</p><h2>Workbook history</h2></div></div>
+          <div class="history-list" id="importHistory"></div>
+        </article>
+      </section>
+
+      <section class="view" id="reviewView">
+        <div class="review-intro card">
+          <div class="feature-icon review"><svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 4.5 3.5 17a2 2 0 0 0 1.8 3h13.4a2 2 0 0 0 1.8-3L13.7 4.5a2 2 0 0 0-3.4 0Z"/></svg></div>
+          <div><p class="kicker">HUMAN CONFIRMATION</p><h2>Uncertain source entries</h2><p>These cells were intentionally not guessed. Confirm the status, hours, and location to finish importing them.</p></div>
+        </div>
+        <div class="review-list" id="reviewList"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="workerDialog">
+    <form method="dialog" class="dialog-card" id="workerForm">
+      <button class="dialog-close" type="button" data-close-dialog aria-label="Close">×</button>
+      <p class="kicker">WORKER DIRECTORY</p><h2>Add a worker</h2>
+      <p>They will appear in the daily entry list immediately.</p>
+      <label class="field"><span>Full name *</span><input id="newWorkerName" required placeholder="e.g. Maria Hernandez"></label>
+      <div class="dialog-actions"><button class="ghost-button" type="button" data-close-dialog>Cancel</button><button class="primary-button" id="createWorker" type="submit">Add worker</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="workerCopyDialog">
+    <form method="dialog" class="dialog-card worker-copy-dialog" id="workerCopyForm">
+      <button class="dialog-close" type="button" data-close-copy-dialog aria-label="Close">×</button>
+      <p class="kicker">COPY WORK SCHEDULE</p><h2>Copy selected days</h2>
+      <p id="workerCopySummary">Choose one or more destination workers.</p>
+      <label class="field"><span>Add destination worker</span><div class="copy-worker-search"><input id="copyWorkerSearch" type="search" list="workerSuggestions" placeholder="Search worker name" autocomplete="off"><button class="secondary-button" type="button" id="addCopyWorker">Add</button></div></label>
+      <div class="copy-target-list" id="copyTargetList"><small>No destination workers selected.</small></div>
+      <p class="copy-warning">The selected dates, locations, hours, and connected cost centers will be saved for the source worker and copied to every destination worker. Existing records on those destination dates will be replaced.</p>
+      <div class="dialog-actions"><button class="ghost-button" type="button" data-close-copy-dialog>Cancel</button><button class="primary-button" id="confirmWorkerCopy" type="submit" disabled>Save and copy</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toasts" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

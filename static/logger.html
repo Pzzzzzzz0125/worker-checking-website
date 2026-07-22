@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#183f34">
+  <title>Speed Construction · Daily Log</title>
+  <link rel="stylesheet" href="/logger.css">
+</head>
+<body>
+  <header class="log-header">
+    <a class="log-brand" href="/" aria-label="Daily logging home">
+      <img src="/assets/speed-construction-logo.png" alt="Speed Construction">
+      <span><strong>Daily Log</strong><small>Foreman entry</small></span>
+    </a>
+    <a class="check-link" href="http://localhost:8000/">Checking site</a>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">TODAY'S WORK</p>
+      <h1>Record a worker day</h1>
+      <p>Choose the date and worker, then record locations and add cost centers when available.</p>
+    </section>
+
+    <section class="selection-card card">
+      <label><span>1 · Work date</span><input id="logDate" type="date"></label>
+      <label><span>2 · Worker</span><input id="workerSearch" type="search" list="loggerWorkers" placeholder="Search worker name" autocomplete="off"><datalist id="loggerWorkers"></datalist></label>
+      <button id="openEntry" class="primary">Open worker</button>
+    </section>
+
+    <section id="entryEmpty" class="empty-card card">
+      <div>2</div><h2>Choose a worker</h2><p>The daily work form will appear here.</p>
+    </section>
+
+    <form id="logForm" hidden>
+      <section class="worker-card card">
+        <div><p class="eyebrow">WORKER</p><h2 id="selectedWorker">—</h2><p id="selectedDate">—</p></div>
+        <div class="status-toggle" role="group" aria-label="Work status">
+          <button type="button" class="active" data-status="worked">Worked</button>
+          <button type="button" data-status="off">Off</button>
+        </div>
+      </section>
+
+      <section id="workedFields">
+        <div class="section-heading"><div><p class="eyebrow">LOCATIONS & COST CENTERS</p><h2>Where did they work?</h2></div><button type="button" id="useLast" class="secondary">Use last entry</button></div>
+        <div id="locationList" class="location-list"></div>
+        <button type="button" id="addLocation" class="add-location">＋ Add another location</button>
+
+        <section class="hours-card card">
+          <div class="section-heading compact"><div><p class="eyebrow">TIME & PAY</p><h2>Hours</h2></div><strong id="totalHoursLabel">8h total</strong></div>
+          <div class="field-grid">
+            <label><span>Regular hours</span><input id="regularHours" type="number" min="0" max="24" step=".25" value="8"></label>
+            <label><span>OT hours</span><input id="overtimeHours" type="number" min="0" max="16" step=".25" value="0"></label>
+            <label><span>Extra $</span><input id="extraPay" type="number" min="0" step="1" value="0"></label>
+          </div>
+          <details>
+            <summary>Work time and notes</summary>
+            <div class="field-grid details-grid">
+              <label><span>Start</span><input id="startTime" type="time" value="08:30"></label>
+              <label><span>End</span><input id="endTime" type="time" value="16:30"></label>
+              <label class="notes"><span>Notes</span><textarea id="logNotes" rows="2" placeholder="Optional"></textarea></label>
+            </div>
+          </details>
+        </section>
+
+        <section class="preview-card card"><span>Excel cell preview</span><code id="cellPreview">—</code></section>
+      </section>
+
+      <div class="save-bar">
+        <div><strong id="saveState">Ready to save</strong><small>Saved data appears on the checking site.</small></div>
+        <button id="saveLog" class="primary" type="submit">Save worker day</button>
+      </div>
+    </form>
+  </main>
+
+  <datalist id="loggerLocations"></datalist>
+  <datalist id="loggerCostCenters"></datalist>
+  <div id="toasts" aria-live="polite"></div>
+  <footer>Speed Construction Worker Schedule<br><small>Developed by Zihao (Paul) Zhao</small></footer>
+  <script src="/logger.js"></script>
+</body>
+</html>
