@@ -1,0 +1,85 @@
+import unittest
+
+from api.bootstrap import build_bootstrap
+from api.summary import build_summary
+
+
+def record(record_id, **fields):
+    return {"record_id": record_id, "fields": fields}
+
+
+class FakeBase:
+    def __init__(self):
+        self.data = {
+            "Workers": [
+                record("rec-worker", **{"Worker Key": "7", "Name": "Ana Diaz", "Active": True})
+            ],
+            "Cost Centers": [
+                record(
+                    "rec-center",
+                    **{"Cost Center ID": "CC-12", "Name": "Framing", "Active": True},
+                )
+            ],
+            "Location Entries": [
+                record(
+                    "rec-location",
+                    **{
+                        "Location Entry Key": "alloc-1",
+                        "Work Day Key": "7|2026-07-01",
+                        "Worker Key": "7",
+                        "Work Date": "2026-07-01",
+                        "Location": "444 Pocatello",
+                        "Cost Center ID": "CC-12",
+                        "Cost Center Name": "Framing",
+                        "Regular Hours": 8,
+                    },
+                )
+            ],
+            "Work Days": [
+                record(
+                    "rec-day",
+                    **{
+                        "Work Day Key": "7|2026-07-01",
+                        "Worker Key": "7",
+                        "Worker Name": "Ana Diaz",
+                        "Work Date": "2026-07-01",
+                        "Status": "worked",
+                        "Total Hours": 10,
+                        "Overtime Hours": 2,
+                        "Extra Pay": 20,
+                        "Start Time": "08:30",
+                        "End Time": "18:30",
+                        "Confidence": "low",
+                    },
+                )
+            ],
+        }
+
+    def missing_tables(self):
+        return []
+
+    def records(self, name):
+        return self.data.get(name, [])
+
+
+class LarkBaseReadTests(unittest.TestCase):
+    def test_bootstrap_reads_reference_data(self):
+        result = build_bootstrap(FakeBase())
+        self.assertEqual(result["workers"], [{"id": 7, "name": "Ana Diaz", "active": 1}])
+        self.assertEqual(result["cost_centers"], [{"id": "CC-12", "name": "Framing"}])
+        self.assertEqual(result["locations"], ["444 Pocatello"])
+        self.assertEqual(result["review_count"], 1)
+        self.assertEqual(result["last_recorded_date"], "2026-07-01")
+
+    def test_summary_joins_days_and_allocations(self):
+        result = build_summary(FakeBase(), "2026-07-01", "2026-07-15")
+        self.assertEqual(result["totals"]["hours"], 10)
+        self.assertEqual(result["totals"]["extra_pay"], 20)
+        self.assertEqual(result["totals"]["active_workers"], 1)
+        self.assertEqual(result["records"][0]["locations"][0]["name"], "444 Pocatello")
+        self.assertEqual(result["records"][0]["cost_centers"][0]["id"], "CC-12")
+        self.assertEqual(result["daily"], [{"date": "2026-07-01", "hours": 10.0}])
+
+
+if __name__ == "__main__":
+    unittest.main()
