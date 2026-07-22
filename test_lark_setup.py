@@ -41,7 +41,8 @@ class LarkSetupTests(unittest.TestCase):
                     }
                     for index, definition in enumerate(body["table"]["fields"], start=1)
                 ]
-                return {"code": 0, "data": {"table": table}}
+                # Current Lark Base API returns table_id directly under data.
+                return {"code": 0, "data": {"table_id": table_id}}
             if method == "POST" and path.endswith("/fields"):
                 table_id = path.split("/tables/", 1)[1].split("/", 1)[0]
                 field = {

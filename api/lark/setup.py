@@ -178,7 +178,15 @@ def _initialize(token: str, app_token: str) -> dict:
                     }
                 },
             )
-            table = payload.get("data", {}).get("table", {})
+            data = payload.get("data") or {}
+            nested_table = data.get("table") if isinstance(data, dict) else None
+            if isinstance(nested_table, dict):
+                table = nested_table
+            else:
+                table = {
+                    "name": table_name,
+                    "table_id": data.get("table_id", "") if isinstance(data, dict) else "",
+                }
             if not table.get("table_id"):
                 raise LarkAPIError(f"Lark created {table_name} without returning its table ID.")
             current[table_name] = table
