@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+import os
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+LARK_API = "https://open.larksuite.com/open-apis"
+
+
+class LarkAPIError(RuntimeError):
+    def __init__(self, message: str, *, code: int | None = None, status: int = 502):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def _read_json(request: Request) -> dict:
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode("utf-8"))
+            message = detail.get("msg") or detail.get("message") or str(error)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            message = str(error)
+        raise LarkAPIError(message, status=error.code) from error
+    except (URLError, TimeoutError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise LarkAPIError(f"Could not reach Lark: {error}") from error
+    if not isinstance(payload, dict):
+        raise LarkAPIError("Lark returned an invalid response.")
+    code = payload.get("code", 0)
+    if code not in (0, None):
+        message = payload.get("msg") or payload.get("message") or "Lark API request failed."
+        status = 403 if code in {99991663, 99991672, 1254302} else 502
+        raise LarkAPIError(f"{message} (Lark code {code})", code=code, status=status)
+    return payload
+
+
+def tenant_access_token() -> str:
+    app_id = os.environ.get("LARK_APP_ID", "").strip()
+    app_secret = os.environ.get("LARK_APP_SECRET", "").strip()
+    if not app_id or not app_secret:
+        raise LarkAPIError("LARK_APP_ID and LARK_APP_SECRET are not configured.", status=503)
+    request = Request(
+        f"{LARK_API}/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    payload = _read_json(request)
+    token = payload.get("tenant_access_token", "")
+    if not token:
+        raise LarkAPIError("Lark did not return a tenant access token.")
+    return token
+
+
+def lark_api(
+    method: str,
+    path: str,
+    *,
+    token: str,
+    body: dict | None = None,
+    query: dict[str, str | int] | None = None,
+) -> dict:
+    url = f"{LARK_API}{path}"
+    if query:
+        url += "?" + urlencode(query)
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request = Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        method=method,
+    )
+    return _read_json(request)
+
+
+def paged_items(path: str, *, token: str) -> list[dict]:
+    items: list[dict] = []
+    page_token = ""
+    while True:
+        query: dict[str, str | int] = {"page_size": 100}
+        if page_token:
+            query["page_token"] = page_token
+        payload = lark_api("GET", path, token=token, query=query)
+        data = payload.get("data") or {}
+        page_items = data.get("items") or []
+        if not isinstance(page_items, list):
+            raise LarkAPIError("Lark returned an invalid paginated response.")
+        items.extend(item for item in page_items if isinstance(item, dict))
+        if not data.get("has_more"):
+            return items
+        page_token = str(data.get("page_token") or "")
+        if not page_token:
+            raise LarkAPIError("Lark pagination did not return a page token.")

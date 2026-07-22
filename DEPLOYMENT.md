@@ -39,6 +39,13 @@ Use a restricted Lark app audience and enforce server-side roles before payroll
 data is exposed. OAuth identifies the user; it does not by itself authorize
 that user to view payroll.
 
+After signing in, `/api/auth/me` returns the current user's Lark `open_id`.
+Add the administrator's ID to `LARK_ADMIN_OPEN_IDS`, redeploy, then send an
+authenticated `POST` request to `/api/lark/setup` to create any missing Base
+tables and fields. The operation is idempotent: existing records and correctly
+named fields are preserved. A signed-in user can use `GET /api/lark/setup` as a
+read-only permission and schema diagnostic.
+
 ## Lark Base tables
 
 Use stable field names and do not delete or rename fields after integration.
