@@ -2,34 +2,166 @@
 
 Developed by Zihao (Paul) Zhao.
 
-A workforce web app for searching worker hours, recording work days, reviewing
-payroll, and safely comparing Excel workbooks. Local development uses SQLite;
-the production deployment is being prepared for Vercel with Lark Base storage
-and Lark OAuth login.
+Speed Construction Worker Schedule is a workforce-recording and payroll-review
+web application for Speed Construction. The current production version is a
+responsive React application deployed on Vercel, authenticated with Lark OAuth,
+and backed by Lark Base.
 
-## Start the app
+Production: [https://workforce-app-theta.vercel.app](https://workforce-app-theta.vercel.app)
 
-On macOS, double-click **Start FieldLedger.command**.
+## Current production architecture
 
-Or run:
-
-```bash
-python3 server.py
+```text
+React + TypeScript browser application
+             |
+             v
+Vercel static hosting and Python serverless APIs
+             |
+       Lark OAuth login
+             |
+             v
+Lark Base workforce records + Lark Drive source workbooks
 ```
 
-The local command starts two connected development sites:
+- The browser never receives the Lark app secret or tenant access token.
+- Vercel functions read and update Lark Base on behalf of the application.
+- Website changes are visible in Lark Base; Base changes appear after the
+  website refreshes.
+- Frequently repeated reads are cached briefly, while date-range reports use
+  Lark-side filters instead of downloading the full historical dataset.
+- Local SQLite files remain development/legacy resources and are not the
+  production source of truth.
 
-- Checking site: [http://localhost:8000](http://localhost:8000)
-- Mobile logging site: [http://localhost:7001](http://localhost:7001)
+## Production workflows
 
-The Python server has no external package dependencies. Both sites use the same
-API code and store data in the same local `data/worklog.sqlite3` database, so a
-saved logging entry is immediately visible on the checking site.
+### Overview
 
-The main interface is built with React, TypeScript, Tailwind CSS, shadcn-style
-components, TanStack Table, Recharts, React Hook Form, Zod, and Lucide icons.
-Its compiled production files are committed in `static/app-ui`, so Node.js is
-not required just to run the app. To change and rebuild the frontend:
+- Choose a date range and optionally a worker.
+- Review total hours, active workers, worked/off days, extra pay, and daily
+  workload.
+- Search and sort the loaded work-record table.
+- See locations, linked cost centers, and recorded location time ranges.
+
+### Payroll check
+
+- Choose a month and either `1–15` or `16–month end`.
+- Review actual hours, California-weighted hours, estimated salary cost,
+  worked/off days, and checked status.
+- Expand a worker directly below their row to see the payment-period work
+  history, location allocation, cost-center allocation, and extra pay.
+- W-2 workers receive daily/weekly/seventh-day California overtime weighting.
+  Properly classified 1099 contractors remain straight-time in the application.
+- Overtime calculation reads the complete workweek even when the week crosses
+  a half-month payroll boundary.
+
+Payroll values are estimates for review and are not a replacement for final
+payroll or legal classification review.
+
+### Location check
+
+- Search a known location and choose a date range.
+- See total workers, allocated hours, distinct work days, and the first/last
+  recorded dates.
+- Review each worker's hours and days at that location.
+
+### Daily entry
+
+- Choose one day and update multiple workers.
+- Search workers locally after the day loads.
+- Record one or more locations for each worker.
+- Each location supports:
+  - its own optional start and end time;
+  - automatically calculated location hours;
+  - one or more required cost centers.
+- If every location time is blank, a worked day defaults to eight hours.
+- When location times are entered, all named locations require complete,
+  non-overlapping ranges.
+- Total Hours and Overtime remain visible and editable. Saving is blocked with
+  a `Time conflict` message when the location ranges, total, and overtime do
+  not agree.
+- Cost-center search selections are committed automatically. Blue chips show
+  which centers are actually attached to the location.
+- Copy/Paste reuses one worker's day information for another worker.
+- Browser drafts protect unsaved Daily Entry edits across refreshes.
+
+### Worker entry
+
+- Choose one worker and one month.
+- Edit multiple dates using the same location-time and cost-center rules as
+  Daily Entry.
+- Save one day or all edited days.
+- Select multiple days and copy them to one or more workers when a crew shared
+  the same schedule.
+
+### Lark Drive migration
+
+- The application can verify the three authoritative Lark Drive workbooks
+  without changing Base records.
+- Migration preview reports counts, date range, totals, and normalization
+  warnings.
+- Confirmed migration creates only missing keyed records and can safely resume
+  by stage after interruption.
+- The imported 2026 dataset currently includes Workers, Cost Centers, Work
+  Days, and Location Entries in Lark Base.
+
+The sidebar also contains AI Reading, Needs Review, and broader export surfaces.
+Their complete production write/export APIs are still being integrated; do not
+describe those screens as operational until their server routes are deployed
+and verified.
+
+## Time, location, and cost-center rules
+
+- A worked day requires at least one location and every location requires at
+  least one cost center.
+- Location time ranges are optional only as a complete set: either all location
+  times are blank, or every named location has both Start and End.
+- Blank location times preserve the normalized default of eight total hours.
+- Entered location ranges calculate the actual daily total.
+- Ranges cannot end before they start or overlap another location range.
+- Daily overtime must equal hours above eight when explicitly entered.
+- Multiple cost centers divide a location's regular/overtime allocation without
+  introducing rounding drift. For example, eight hours across three centers is
+  stored as `2.67 + 2.67 + 2.66`, not `8.01`.
+- New web entries do not store a day-level start/end range; time belongs to each
+  Location Entry.
+
+## Normalized work cells
+
+The importer and display preview use one canonical format:
+
+- `off`
+- `off (vacation)`
+- `444` — one location, default eight hours
+- `444;111` — multiple locations sharing eight total hours
+- `432(3);1151(5)` — explicit location-hour allocation
+- `669, ot 2h` — eight regular hours plus two overtime hours
+- `1545, ex $20` — separate extra pay
+- `1545, ot 2h, ex $20` — overtime and extra pay together
+
+Semicolon is the canonical location separator. Extra pay is never converted
+into work hours. Low-confidence imported values remain identifiable for review
+instead of being silently guessed.
+
+## Authentication and access
+
+- Anyone with the Vercel URL can reach the public sign-in surface.
+- Workforce and payroll APIs require a signed Lark session.
+- The Lark app's released-version **Availability scope** controls which Lark
+  users can authorize login.
+- Every currently authorized application user has the same normal view/edit
+  capabilities; fine-grained Admin, Foreman, and Viewer roles are not yet
+  implemented.
+- `LARK_ADMIN_OPEN_IDS` restricts Base initialization and Drive migration, not
+  normal entry or report pages.
+- Sessions are signed, HTTP-only, SameSite cookies with a 12-hour lifetime.
+
+The Lark Base collaborator list is separate from website access. The server
+uses the application's tenant token, so application authorization must remain
+restricted to approved users.
+
+## Local development
+
+The current frontend requires Node.js for development:
 
 ```bash
 cd frontend
@@ -37,99 +169,57 @@ npm install
 npm run build
 ```
 
-The previous vanilla interface remains available at
-[http://localhost:8000/legacy](http://localhost:8000/legacy) as a fallback.
+The compiled production assets are written to `static/app-ui` and committed so
+Vercel can serve the same verified build.
 
-## Main workflows
+The repository also contains the earlier local Python/SQLite application:
 
-The checking and logging experiences are separate web pages backed by the same
-database. The logging page is optimized for a foreman using a phone.
+```bash
+python3 server.py
+```
 
-- **Overview:** search a worker by name and choose a date range to view total hours, days worked,
-  locations, extra pay, daily trends, and original Excel cell text.
-- **Daily entry:** choose a date; new rows default to Worked and eight hours.
-  Add structured location rows with optional allocated hours. Every location
-  can optionally have one or several cost centers. A live preview shows
-  the exact normalized Excel cell that will be saved. Overtime and extra pay
-  have separate fields. Each row
-  can be saved individually, and unsaved edits are protected as browser drafts
-  across refreshes. Worked rows also record start time, end time, and a searchable
-  list of one or more cost centers; times default to 8:30 AM and 4:30 PM.
-  Cost-center choices come from columns B (ID) and C (name) of the current
-  cost-code workbook. Each worker row has Copy and Paste controls for reusing
-  one worker's information on another worker on the same Daily Entry page.
-- **Mobile foreman log:** choose a date and worker, then add one or more
-  locations. Each location can optionally have one or several cost centers.
-  Worker/location/cost-center suggestions are ranked from past usage,
-  and unfinished phone entries are protected as browser drafts.
-- **Worker entry:** choose one worker and one month to enter the same work
-  information across every date. It uses the same linked location, location-hour,
-  and multi-cost-center rows as Daily Entry. Each day or all edited days can be
-  saved. Select any combination of days, then copy them to one or more other
-  workers when a crew worked together. The confirmation step names every
-  destination worker and warns that existing entries on those dates will be
-  replaced; the copy is saved as one transaction so it cannot be half-applied.
-- **AI text entry:** paste flexible schedule notes and choose the year. After an
-  explicit data-sharing confirmation, Google Gemini extracts worker/date records,
-  locations, hours, overtime, times, and stated cost centers. Every proposed row
-  remains editable and must be selected and confirmed before it is saved.
-- **Payroll check:** choose either the 1–15 or 16–month-end pay period to see
-  hours, overtime, days worked, and extra pay by worker. Pay rates and estimated
-  totals are intentionally hidden; each worker can still be marked checked.
-  Click a worker to see allocated hours and days by location and cost center,
-  plus the number of workers using each cost center in that period.
-- **Location check:** search a location and date range to see total workers,
-  allocated hours, distinct work days, and each worker's hours, days, first work
-  date, and last work date at that location.
-- **Import & export:** upload a newer workbook to compare it with app data.
-  Changes are shown before anything is applied. Export creates an updated copy
-  of the original workbook while preserving its reference tabs, formatting, and
-  parent-item columns.
-- **Needs review:** confirm source cells that contain ambiguous locations such
-  as `7??` or `-`.
+That server is useful for legacy/local inspection but does not reproduce the
+production Lark-backed storage path.
 
-## Normalized Excel cells
+Run the Python test suite with:
 
-New app entries and exports use one canonical format:
+```bash
+python3 -m unittest discover -v
+```
 
-- `off` and annotated variants such as `off (holiday)`
-- `444` for one location and the default eight hours
-- `444;111` for multiple locations sharing eight total hours
-- `432(3);1151(5)` for an explicit location-hour split
-- `669, ot 2h` for eight regular hours plus two overtime hours
-- `1545, ex $20` for separate extra pay
-- `1545, ot 2h, ex $20` when both annotations apply
+## Deployment
 
-Semicolon is the only location separator in normalized output. The importer
-continues to understand legacy slash, comma, and plus separators so older
-workbooks can still be upgraded safely.
+Vercel builds the React frontend and deploys Python files under `api/` as
+serverless functions. Report and entry routes are consolidated behind one
+function to remain within the Vercel Hobby function limit.
 
-The original cell text is always retained. Low-confidence entries are sent to
-the confirmation queue instead of being guessed.
+Required production configuration includes:
 
-For detail reporting, explicitly entered location hours are preserved. Any
-remaining daily hours are divided evenly among locations without specific
-hours. Cost-center hours are divided evenly among the cost centers assigned to
-that worker-day. Allocated values are rounded to two decimals.
+- `APP_URL`
+- `LARK_APP_ID`
+- `LARK_APP_SECRET`
+- `LARK_OAUTH_SCOPES`
+- `LARK_ADMIN_OPEN_IDS`
+- `LARK_VERIFICATION_TOKEN`
+- `LARK_BASE_APP_TOKEN`
+- Lark Base table IDs
+- `LARK_DRIVE_FOLDER_TOKEN`
+- `SESSION_SECRET`
+- `GEMINI_API_KEY` when AI endpoints are enabled
 
-The Gemini API key is read from the ignored local `data/gemini_api_key` file or
-the `GEMINI_API_KEY` environment variable. The key is never returned to the
-browser or committed to Git. AI Entry sends only the text deliberately pasted
-into that page; it does not send the local worker roster or database. Do not
-paste Social Security numbers, banking details, pay rates, or unrelated private
-information.
+Never commit real secrets, payroll workbooks, private Drive exports, or local
+SQLite databases. See [DEPLOYMENT.md](DEPLOYMENT.md) and
+[.env.example](.env.example) for configuration details.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the Lark Base storage, authentication,
-migration, and Vercel configuration before publishing online.
+## Primary Lark Base tables
 
-## Important data notes
-
-- Only sheets named as half-month ranges (for example `Feb 1-15`) are treated
-  as work logs.
-- The latest half-month sheet supplies the active daily-entry roster.
-  Historical workers remain searchable.
-- Duplicate names in the same sheet are kept separate. The existing workbook
-  has two different `Marcos` rows; the second is displayed as `Marcos (2)`.
-- The current workbook only contains half-month tabs through July. The app can
-  store later dates, but exporting those dates into new August–December tabs
-  will require adding those tabs to the workbook template first.
+- **Workers** — stable worker key, name, active status, W-2/1099 type, rate, and
+  display order.
+- **Work Days** — worker/date status, total and overtime hours, extra pay,
+  source, confidence, and notes.
+- **Location Entries** — work-day key, location, per-location time range,
+  regular/overtime allocation, and linked cost center.
+- **Cost Centers** — cost-center ID, name, and active status.
+- **Payroll Checks** — worker, payroll period, checked status, checker, and
+  timestamp.
+- **Audit Log** — reserved actor/action/entity history.
