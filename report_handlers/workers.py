@@ -149,6 +149,37 @@ def access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dic
     }
 
 
+def payroll_access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dict:
+    """Payroll is intentionally a separate, read-sensitive permission scope."""
+    is_lark_admin = current_session.get("sub") in admin_ids()
+    password_session = verify_payload(
+        cookie_value(handler, "payroll_access_session"), 8 * 60 * 60,
+    )
+    has_password_access = bool(
+        password_session
+        and password_session.get("scope") == "payroll-check"
+        and password_session.get("sub") == current_session.get("sub")
+    )
+    return {
+        "authorized": is_lark_admin or has_password_access,
+        "access_type": "lark_admin" if is_lark_admin else "password" if has_password_access else "",
+        "password_configured": bool(os.environ.get("PAYROLL_PASSWORD", "").strip()),
+        "admin_allowlist_configured": bool(admin_ids()),
+    }
+
+
+def require_payroll_access(handler: BaseHTTPRequestHandler) -> bool:
+    current_session = session(handler)
+    if not current_session:
+        json_response(handler, {"error": "Sign in with Lark first."}, 401)
+        return False
+    access = payroll_access_status(handler, current_session)
+    if access["authorized"]:
+        return True
+    json_response(handler, {"error": "Payroll Check requires authorized access.", "code": "payroll_access_required", **access}, 403)
+    return False
+
+
 def action(handler: BaseHTTPRequestHandler) -> str:
     return parse_qs(urlparse(handler.path).query).get("action", [""])[0]
 
@@ -162,6 +193,9 @@ class handler(BaseHTTPRequestHandler):
         access = access_status(self, current_session)
         if action(self) == "workers_access":
             json_response(self, access)
+            return
+        if action(self) == "payroll_access":
+            json_response(self, payroll_access_status(self, current_session))
             return
         if not access["authorized"]:
             json_response(
@@ -238,6 +272,18 @@ class handler(BaseHTTPRequestHandler):
                         )
                     },
                 )
+                return
+            if action(self) == "payroll_unlock":
+                configured = os.environ.get("PAYROLL_PASSWORD", "").strip()
+                supplied = str(body.get("password") or "")
+                if not configured:
+                    json_response(self, {"error": "PAYROLL_PASSWORD is not configured in Vercel.", "code": "payroll_password_not_configured"}, 503)
+                    return
+                if not hmac.compare_digest(supplied, configured):
+                    json_response(self, {"error": "Incorrect Payroll Check password."}, 403)
+                    return
+                grant = sign_payload({"sub": current_session.get("sub", ""), "scope": "payroll-check", "iat": int(time.time())})
+                json_response(self, {"authorized": True, "access_type": "password"}, headers={"Set-Cookie": cookie_header("payroll_access_session", grant, 8 * 60 * 60, secure_cookie(self))})
                 return
             access = access_status(self, current_session)
             if not access["authorized"]:
