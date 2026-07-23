@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -24,7 +24,11 @@ class handler(BaseHTTPRequestHandler):
             return
         try:
             start, end = pay_period(month, half)
-            data = load_report_data(LarkBase())
+            query_start = start - timedelta(days=start.weekday())
+            query_end = end + timedelta(days=6 - end.weekday())
+            data = load_report_data(
+                LarkBase(), query_start, query_end, check_period_start=start,
+            )
             workers = []
             for worker_key, worker in data["workers"].items():
                 period_days = [

@@ -58,7 +58,8 @@ class FakeBase:
     def missing_tables(self):
         return []
 
-    def records(self, name):
+    def records(self, name, **kwargs):
+        del kwargs
         return self.data.get(name, [])
 
 

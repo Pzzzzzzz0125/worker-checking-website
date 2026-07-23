@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -22,7 +23,10 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": "Choose a location and valid date range."}, 400)
             return
         try:
-            data = load_report_data(LarkBase())
+            data = load_report_data(
+                LarkBase(), date.fromisoformat(start), date.fromisoformat(end),
+                location=requested,
+            )
             names = sorted(
                 {location["name"] for day in data["days"] for location in day["locations"] if location["name"]},
                 key=str.casefold,

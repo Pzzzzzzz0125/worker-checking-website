@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from datetime import datetime
 from urllib.parse import quote
@@ -18,6 +19,7 @@ REQUIRED_TABLES = {
     "Audit Log",
 }
 _TABLE_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+_RECORD_CACHE: dict[tuple[str, str, str, tuple[str, ...]], tuple[float, list[dict]]] = {}
 
 
 class LarkBase:
@@ -50,17 +52,41 @@ class LarkBase:
     def missing_tables(self) -> list[str]:
         return sorted(REQUIRED_TABLES - self.table_ids().keys())
 
-    def records(self, table_name: str) -> list[dict]:
+    def records(
+        self,
+        table_name: str,
+        *,
+        filter_formula: str = "",
+        field_names: tuple[str, ...] = (),
+        cache_seconds: int = 45,
+    ) -> list[dict]:
         table_id = self.table_ids().get(table_name, "")
         if not table_id:
             raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        cache_key = (self.app_token, table_name, filter_formula, field_names)
+        cached = _RECORD_CACHE.get(cache_key)
+        if cache_seconds and cached and time.monotonic() < cached[0]:
+            return list(cached[1])
         path = (
             f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
             f"{quote(table_id, safe='')}/records"
         )
+        query: dict[str, str | int] = {}
+        if filter_formula:
+            query["filter"] = filter_formula
+        if field_names:
+            query["field_names"] = json.dumps(field_names)
         # Base record listing supports up to 500 rows per request. Using that
         # limit reduces a 6,800-row table from about 69 requests to 14.
-        return paged_items(path, token=self.token, page_size=500)
+        records = paged_items(path, token=self.token, page_size=500, query=query)
+        if cache_seconds:
+            _RECORD_CACHE[cache_key] = (time.monotonic() + cache_seconds, list(records))
+        return records
+
+    def invalidate_records(self, table_name: str) -> None:
+        for key in list(_RECORD_CACHE):
+            if key[0] == self.app_token and key[1] == table_name:
+                _RECORD_CACHE.pop(key, None)
 
     def create_missing(
         self,
@@ -111,6 +137,8 @@ class LarkBase:
                 token=self.token,
                 body={"records": [{"fields": row} for row in batch]},
             )
+        if missing:
+            self.invalidate_records(table_name)
         return {
             "expected": len(rows),
             "created": len(missing),
@@ -141,6 +169,7 @@ class LarkBase:
                 token=self.token,
                 body={"records": [{"record_id": record_id, "fields": fields}]},
             )
+            self.invalidate_records(table_name)
             return {"created": False, "record_id": record_id}
         payload = lark_api(
             "POST",
@@ -149,6 +178,7 @@ class LarkBase:
             body={"records": [{"fields": fields}]},
         )
         created = ((payload.get("data") or {}).get("records") or [{}])[0]
+        self.invalidate_records(table_name)
         return {"created": True, "record_id": created.get("record_id", "")}
 
 
@@ -214,3 +244,15 @@ def worker_id(value, fallback: int = 0) -> int:
         return int(float(text))
     except ValueError:
         return fallback
+
+
+def formula_string(value: str) -> str:
+    """Quote a text value safely for a Lark Base filter formula."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def date_range_filter(field_name: str, start: str, end: str) -> str:
+    return (
+        f'AND(CurrentValue.[{field_name}]>=TODATE({formula_string(start)}),'
+        f'CurrentValue.[{field_name}]<=TODATE({formula_string(end)}))'
+    )

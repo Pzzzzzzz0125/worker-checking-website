@@ -70,8 +70,12 @@ def build_bootstrap_details(base: LarkBase) -> dict:
     if hasattr(base, "table_ids"):
         base.table_ids()
     with ThreadPoolExecutor(max_workers=2) as executor:
-        locations_future = executor.submit(base.records, "Location Entries")
-        days_future = executor.submit(base.records, "Work Days")
+        locations_future = executor.submit(
+            base.records, "Location Entries", field_names=("Location",), cache_seconds=300,
+        )
+        days_future = executor.submit(
+            base.records, "Work Days", field_names=("Work Date", "Confidence"), cache_seconds=60,
+        )
         location_records = locations_future.result()
         work_days = days_future.result()
     locations = sorted(

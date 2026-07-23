@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -25,7 +25,12 @@ class handler(BaseHTTPRequestHandler):
             return
         try:
             start, end = pay_period(month, half)
-            data = load_report_data(LarkBase())
+            query_start = start - timedelta(days=start.weekday())
+            query_end = end + timedelta(days=6 - end.weekday())
+            data = load_report_data(
+                LarkBase(), query_start, query_end, worker_key=worker_id,
+                check_period_start=start,
+            )
             worker = next((item for item in data["workers"].values() if item["id"] == int(worker_id)), None)
             if not worker:
                 raise ValueError("Choose a valid worker.")

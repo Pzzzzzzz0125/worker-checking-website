@@ -5,7 +5,16 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
-from api._lark_base import LarkBase, bool_value, date_value, field, number_value, text_value
+from api._lark_base import (
+    LarkBase,
+    bool_value,
+    date_range_filter,
+    date_value,
+    field,
+    formula_string,
+    number_value,
+    text_value,
+)
 
 
 def pay_period(month: str, half: str) -> tuple[date, date]:
@@ -17,14 +26,42 @@ def pay_period(month: str, half: str) -> tuple[date, date]:
     return date(year, month_number, 16), date(year, month_number, calendar.monthrange(year, month_number)[1])
 
 
-def load_report_data(base: LarkBase) -> dict:
+def load_report_data(
+    base: LarkBase,
+    start: date,
+    end: date,
+    *,
+    worker_key: str = "",
+    location: str = "",
+    check_period_start: date | None = None,
+) -> dict:
     if hasattr(base, "table_ids"):
         base.table_ids()
+    day_parts = [date_range_filter("Work Date", start.isoformat(), end.isoformat())]
+    if worker_key:
+        day_parts.append(f"CurrentValue.[Worker Key]={formula_string(worker_key)}")
+    day_filter = day_parts[0] if len(day_parts) == 1 else f"AND({','.join(day_parts)})"
+    location_parts = list(day_parts)
+    if location:
+        location_parts.append(f"CurrentValue.[Location]={formula_string(location)}")
+    location_filter = (
+        location_parts[0]
+        if len(location_parts) == 1
+        else f"AND({','.join(location_parts)})"
+    )
+    check_filter = (
+        f"CurrentValue.[Period Start]=TODATE({formula_string(check_period_start.isoformat())})"
+        if check_period_start else ""
+    )
     with ThreadPoolExecutor(max_workers=4) as executor:
         workers_future = executor.submit(base.records, "Workers")
-        days_future = executor.submit(base.records, "Work Days")
-        locations_future = executor.submit(base.records, "Location Entries")
-        checks_future = executor.submit(base.records, "Payroll Checks")
+        days_future = executor.submit(base.records, "Work Days", filter_formula=day_filter)
+        locations_future = executor.submit(
+            base.records, "Location Entries", filter_formula=location_filter,
+        )
+        checks_future = executor.submit(
+            base.records, "Payroll Checks", filter_formula=check_filter,
+        )
         worker_records = workers_future.result()
         day_records = days_future.result()
         location_records = locations_future.result()
