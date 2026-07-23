@@ -104,6 +104,7 @@ payroll or legal classification review.
 - Select or deselect every day in the loaded month with one button.
 - Select multiple days and copy them to one or more workers when a crew shared
   the same schedule.
+- Search the worker checklist inside the copy dialog before selecting targets.
 
 ### Worker management
 
@@ -115,6 +116,9 @@ payroll or legal classification review.
   worker name changes.
 - Saved classification and rate changes flow into payroll estimates; saved
   names and active status refresh the entry-page worker lists.
+- Access requires either a Lark identity listed in `LARK_ADMIN_OPEN_IDS` or the
+  separate `WORKER_ADMIN_PASSWORD`. Successful password unlocks use an
+  HTTP-only, user-bound cookie that expires after eight hours.
 
 ### Lark Drive migration
 
@@ -171,11 +175,12 @@ instead of being silently guessed.
 - Workforce and payroll APIs require a signed Lark session.
 - The Lark app's released-version **Availability scope** controls which Lark
   users can authorize login.
-- Every currently authorized application user has the same normal view/edit
-  capabilities; fine-grained Admin, Foreman, and Viewer roles are not yet
+- Every currently authorized application user has the same normal entry and
+  report capabilities; broader Admin, Foreman, and Viewer roles are not yet
   implemented.
-- `LARK_ADMIN_OPEN_IDS` restricts Base initialization and Drive migration, not
-  normal entry or report pages.
+- Worker Management, Base initialization, and Drive migration require a
+  configured Lark administrator. Worker Management can also be unlocked with
+  the separate server-side management password.
 - Sessions are signed, HTTP-only, SameSite cookies with a 12-hour lifetime.
 
 The Lark Base collaborator list is separate from website access. The server
@@ -223,12 +228,17 @@ Required production configuration includes:
 - `LARK_APP_SECRET`
 - `LARK_OAUTH_SCOPES`
 - `LARK_ADMIN_OPEN_IDS`
+- `WORKER_ADMIN_PASSWORD` for optional password access to Worker Management
 - `LARK_VERIFICATION_TOKEN`
 - `LARK_BASE_APP_TOKEN`
 - Lark Base table IDs
 - `LARK_DRIVE_FOLDER_TOKEN`
 - `SESSION_SECRET`
 - `GEMINI_API_KEY` when AI endpoints are enabled
+
+Gemini parsing runs only on the server. `/api/ai/parse` returns proposed records
+for review, and `/api/ai/apply` writes only the records the user explicitly
+confirms.
 
 Never commit real secrets, payroll workbooks, private Drive exports, or local
 SQLite databases. See [DEPLOYMENT.md](DEPLOYMENT.md) and

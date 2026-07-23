@@ -46,6 +46,11 @@ tables and fields. The operation is idempotent: existing records and correctly
 named fields are preserved. A signed-in user can use `GET /api/lark/setup` as a
 read-only permission and schema diagnostic.
 
+Worker Management uses the same Lark administrator list. To allow a second
+password-based access path, add `WORKER_ADMIN_PASSWORD` in Vercel and redeploy.
+The password stays server-side; successful unlocks use a user-bound HTTP-only
+cookie that expires after eight hours.
+
 ## Lark Base tables
 
 Use stable field names and do not delete or rename fields after integration.

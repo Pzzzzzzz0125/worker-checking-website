@@ -5,12 +5,23 @@
   "functions": {
     "api/lark/migration.py": {
       "maxDuration": 300
+    },
+    "api/reports.py": {
+      "maxDuration": 300
     }
   },
   "rewrites": [
     {
       "source": "/api/payroll",
       "destination": "/api/reports?action=payroll"
+    },
+    {
+      "source": "/api/ai/parse",
+      "destination": "/api/reports?action=ai_parse"
+    },
+    {
+      "source": "/api/ai/apply",
+      "destination": "/api/reports?action=ai_apply"
     },
     {
       "source": "/api/payroll_worker_detail",
@@ -47,6 +58,14 @@
     {
       "source": "/api/workers",
       "destination": "/api/reports?action=workers"
+    },
+    {
+      "source": "/api/workers/access",
+      "destination": "/api/reports?action=workers_access"
+    },
+    {
+      "source": "/api/workers/unlock",
+      "destination": "/api/reports?action=workers_unlock"
     },
     {
       "source": "/",

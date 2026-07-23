@@ -11,11 +11,15 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 
-def json_response(handler, body: dict, status: int = 200) -> None:
+def json_response(
+    handler, body: dict, status: int = 200, headers: dict[str, str] | None = None,
+) -> None:
     encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store")
+    for name, value in (headers or {}).items():
+        handler.send_header(name, value)
     handler.send_header("Content-Length", str(len(encoded)))
     handler.end_headers()
     handler.wfile.write(encoded)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { DollarSign, Pencil, Save, Search, ShieldCheck, UserCheck, Users } from "lucide-react"
+import { DollarSign, LoaderCircle, LockKeyhole, Pencil, Save, Search, ShieldCheck, UserCheck, Users } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -27,12 +27,22 @@ type WorkerResponse = {
   totals: { workers: number; active: number; w2: number; contractors: number }
 }
 
+type WorkerAccess = {
+  authorized: boolean
+  access_type: "lark_admin" | "password" | ""
+  password_configured: boolean
+  admin_allowlist_configured: boolean
+}
+
 export function WorkersView({ onSaved }: { onSaved: () => void }) {
   const [data, setData] = useState<WorkerResponse | null>(null)
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState<"all" | "active" | "inactive">("all")
   const [draft, setDraft] = useState<WorkerProfile | null>(null)
   const [saving, setSaving] = useState(false)
+  const [access, setAccess] = useState<WorkerAccess | null>(null)
+  const [password, setPassword] = useState("")
+  const [unlocking, setUnlocking] = useState(false)
 
   const load = async () => {
     try {
@@ -41,7 +51,32 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
       toast.error(error instanceof Error ? error.message : "Unable to load workers")
     }
   }
-  useEffect(() => { void load() }, [])
+  const checkAccess = async () => {
+    try {
+      const result = await api<WorkerAccess>("/api/workers/access")
+      setAccess(result)
+      if (result.authorized) await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to check access")
+    }
+  }
+  useEffect(() => { void checkAccess() }, [])
+
+  const unlock = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!password) return
+    setUnlocking(true)
+    try {
+      await postJSON("/api/workers/unlock", { password })
+      setPassword("")
+      await checkAccess()
+      toast.success("Worker Management unlocked for 8 hours.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to unlock Worker Management")
+    } finally {
+      setUnlocking(false)
+    }
+  }
 
   const workers = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -70,6 +105,26 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
       setSaving(false)
     }
   }
+
+  if (!access) return <div className="page"><Card><CardContent className="flex items-center justify-center gap-3 py-20 text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" />Checking Worker Management access…</CardContent></Card></div>
+
+  if (!access.authorized) return <div className="page">
+    <div className="mx-auto max-w-lg py-10">
+      <Card>
+        <CardHeader>
+          <span className="mb-2 grid size-12 place-items-center rounded-xl bg-blue-50 text-primary"><LockKeyhole className="size-6" /></span>
+          <CardTitle>Worker Management is protected</CardTitle>
+          <CardDescription>Only configured Lark administrators or users with the separate Worker Management password can view salary and classification data.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {access.password_configured ? <form className="grid gap-3" onSubmit={unlock}>
+            <label className="field-label">Management password<Input autoFocus type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label>
+            <Button type="submit" disabled={!password || unlocking}>{unlocking ? <LoaderCircle className="size-4 animate-spin" /> : <LockKeyhole className="size-4" />}{unlocking ? "Unlocking…" : "Unlock Worker Management"}</Button>
+          </form> : <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Password access is not configured yet. Add <code>WORKER_ADMIN_PASSWORD</code> in Vercel and redeploy, or add this user's Lark open ID to <code>LARK_ADMIN_OPEN_IDS</code>.</div>}
+        </CardContent>
+      </Card>
+    </div>
+  </div>
 
   return <div className="page">
     <div className="mb-6">

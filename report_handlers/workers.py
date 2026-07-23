@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import hmac
+import os
+import time
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
 from api._lark_base import (
@@ -12,7 +16,14 @@ from api._lark_base import (
     text_value,
     worker_id,
 )
-from api._shared import cookie_value, json_response, verify_payload
+from api._shared import (
+    cookie_header,
+    cookie_value,
+    json_response,
+    secure_cookie,
+    sign_payload,
+    verify_payload,
+)
 from worklog_parser import normalize_name
 
 
@@ -106,10 +117,62 @@ def session(handler: BaseHTTPRequestHandler) -> dict | None:
     return verify_payload(cookie_value(handler, "workforce_session"), 12 * 60 * 60)
 
 
+def admin_ids() -> set[str]:
+    return {
+        value.strip()
+        for value in os.environ.get("LARK_ADMIN_OPEN_IDS", "").split(",")
+        if value.strip()
+    }
+
+
+def access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dict:
+    is_lark_admin = current_session.get("sub") in admin_ids()
+    password_session = verify_payload(
+        cookie_value(handler, "worker_admin_session"), 8 * 60 * 60,
+    )
+    has_password_access = bool(
+        password_session
+        and password_session.get("scope") == "worker-management"
+        and password_session.get("sub") == current_session.get("sub")
+    )
+    return {
+        "authorized": is_lark_admin or has_password_access,
+        "access_type": (
+            "lark_admin" if is_lark_admin
+            else "password" if has_password_access
+            else ""
+        ),
+        "password_configured": bool(
+            os.environ.get("WORKER_ADMIN_PASSWORD", "").strip()
+        ),
+        "admin_allowlist_configured": bool(admin_ids()),
+    }
+
+
+def action(handler: BaseHTTPRequestHandler) -> str:
+    return parse_qs(urlparse(handler.path).query).get("action", [""])[0]
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if not session(self):
+        current_session = session(self)
+        if not current_session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
+            return
+        access = access_status(self, current_session)
+        if action(self) == "workers_access":
+            json_response(self, access)
+            return
+        if not access["authorized"]:
+            json_response(
+                self,
+                {
+                    "error": "Worker Management requires administrator access.",
+                    "code": "worker_admin_required",
+                    **access,
+                },
+                403,
+            )
             return
         try:
             workers = list_workers(LarkBase())
@@ -131,7 +194,8 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
 
     def do_POST(self) -> None:
-        if not session(self):
+        current_session = session(self)
+        if not current_session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         try:
@@ -139,6 +203,54 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("The request body must be an object.")
+            if action(self) == "workers_unlock":
+                configured = os.environ.get("WORKER_ADMIN_PASSWORD", "").strip()
+                supplied = str(body.get("password") or "")
+                if not configured:
+                    json_response(
+                        self,
+                        {
+                            "error": "WORKER_ADMIN_PASSWORD is not configured in Vercel.",
+                            "code": "worker_password_not_configured",
+                        },
+                        503,
+                    )
+                    return
+                if not hmac.compare_digest(supplied, configured):
+                    json_response(self, {"error": "Incorrect Worker Management password."}, 403)
+                    return
+                grant = sign_payload(
+                    {
+                        "sub": current_session.get("sub", ""),
+                        "scope": "worker-management",
+                        "iat": int(time.time()),
+                    }
+                )
+                json_response(
+                    self,
+                    {"authorized": True, "access_type": "password"},
+                    headers={
+                        "Set-Cookie": cookie_header(
+                            "worker_admin_session",
+                            grant,
+                            8 * 60 * 60,
+                            secure_cookie(self),
+                        )
+                    },
+                )
+                return
+            access = access_status(self, current_session)
+            if not access["authorized"]:
+                json_response(
+                    self,
+                    {
+                        "error": "Worker Management requires administrator access.",
+                        "code": "worker_admin_required",
+                        **access,
+                    },
+                    403,
+                )
+                return
             json_response(
                 self,
                 {"saved": True, "worker": update_worker(LarkBase(), body)},
