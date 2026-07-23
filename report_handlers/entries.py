@@ -378,6 +378,31 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
     return {"days": len(day_rows), "locations": len(location_rows), "deleted_locations": len(stale)}
 
 
+def clear_day(base: LarkBase, worker_key: str, work_date: str) -> dict:
+    selected_date = date.fromisoformat(work_date).isoformat()
+    day_key = f"{worker_key}|{selected_date}"
+    day_records, location_records = load_range(
+        base, selected_date, selected_date, worker_key=worker_key,
+    )
+    location_ids = [
+        str(record.get("record_id") or "")
+        for record in location_records
+        if text_value(field(record, "Work Day Key")) == day_key
+    ]
+    day_ids = [
+        str(record.get("record_id") or "")
+        for record in day_records
+        if text_value(field(record, "Work Day Key")) == day_key
+    ]
+    deleted_locations = base.delete_record_ids("Location Entries", location_ids)
+    deleted_days = base.delete_record_ids("Work Days", day_ids)
+    return {
+        "cleared": True,
+        "deleted_days": deleted_days,
+        "deleted_locations": deleted_locations,
+    }
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not session(self):
@@ -443,6 +468,15 @@ class handler(BaseHTTPRequestHandler):
                 forced_worker = str(int(body.get("worker_id") or 0))
                 rows = [{**row, "forced_worker": forced_worker} for row in body.get("records") or []]
                 json_response(self, {"saved": True, **save_rows(base, rows, worker_map)})
+                return
+            if action == "day_clear":
+                worker_key = str(int(body.get("worker_id") or 0))
+                if worker_key not in worker_map:
+                    raise ValueError("Choose a valid worker.")
+                json_response(
+                    self,
+                    clear_day(base, worker_key, str(body.get("date") or "")),
+                )
                 return
             if action == "worker_days_copy":
                 source_rows = body.get("records") or []

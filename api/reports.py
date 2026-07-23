@@ -30,7 +30,7 @@ class handler(BaseHTTPRequestHandler):
         selected.do_GET(self)
 
     def do_POST(self) -> None:
-        if self.action() in {"day", "worker_days", "worker_days_copy"}:
+        if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)
             return
         if self.action() != "payroll_check":
