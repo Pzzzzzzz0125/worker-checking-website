@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ REQUIRED_TABLES = {
     "Payroll Checks",
     "Audit Log",
 }
+_TABLE_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
 
 
 class LarkBase:
@@ -28,6 +30,10 @@ class LarkBase:
 
     def table_ids(self) -> dict[str, str]:
         if self._table_ids is None:
+            cached = _TABLE_CACHE.get(self.app_token)
+            if cached and time.monotonic() < cached[0]:
+                self._table_ids = dict(cached[1])
+                return self._table_ids
             path = f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables"
             tables = paged_items(path, token=self.token)
             self._table_ids = {
@@ -35,6 +41,10 @@ class LarkBase:
                 for item in tables
                 if item.get("name") and item.get("table_id")
             }
+            _TABLE_CACHE[self.app_token] = (
+                time.monotonic() + 300,
+                dict(self._table_ids),
+            )
         return self._table_ids
 
     def missing_tables(self) -> list[str]:
@@ -48,7 +58,9 @@ class LarkBase:
             f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
             f"{quote(table_id, safe='')}/records"
         )
-        return paged_items(path, token=self.token)
+        # Base record listing supports up to 500 rows per request. Using that
+        # limit reduces a 6,800-row table from about 69 requests to 14.
+        return paged_items(path, token=self.token, page_size=500)
 
 
 def field(record: dict, name: str):

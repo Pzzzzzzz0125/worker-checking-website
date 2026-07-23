@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
@@ -42,7 +43,8 @@ class handler(BaseHTTPRequestHandler):
             token = tenant_access_token()
             files = folder_files(token, drive_folder_token())
             selected = [exact_file(files, name) for name in FILES]
-            contents = [download_file(item, token) for item in selected]
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                contents = list(executor.map(lambda item: download_file(item, token), selected))
             preview = build_preview(*contents, year=2026)
             preview["files"] = [
                 {

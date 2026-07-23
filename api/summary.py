@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -10,13 +11,26 @@ from api._shared import cookie_value, json_response, verify_payload
 
 
 def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "") -> dict:
+    # Resolve table metadata once, then overlap the three independent Lark
+    # record requests. This changes latency from their sum to roughly the
+    # slowest individual request.
+    if hasattr(base, "table_ids"):
+        base.table_ids()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        workers_future = executor.submit(base.records, "Workers")
+        allocations_future = executor.submit(base.records, "Location Entries")
+        days_future = executor.submit(base.records, "Work Days")
+        worker_records = workers_future.result()
+        allocation_records = allocations_future.result()
+        day_records = days_future.result()
+
     workers = {
         text_value(field(record, "Worker Key")): text_value(field(record, "Name"))
-        for record in base.records("Workers")
+        for record in worker_records
         if text_value(field(record, "Worker Key"))
     }
     allocations: dict[str, list[dict]] = defaultdict(list)
-    for record in base.records("Location Entries"):
+    for record in allocation_records:
         day_key = text_value(field(record, "Work Day Key"))
         if not day_key:
             continue
@@ -32,7 +46,7 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
         )
 
     records = []
-    for record in base.records("Work Days"):
+    for record in day_records:
         work_date = date_value(field(record, "Work Date"))
         worker_key = text_value(field(record, "Worker Key"))
         if not work_date or work_date < start or work_date > end:

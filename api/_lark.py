@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 LARK_API = "https://open.larksuite.com/open-apis"
+_TENANT_TOKEN = ""
+_TENANT_TOKEN_EXPIRES_AT = 0.0
 
 
 class LarkAPIError(RuntimeError):
@@ -41,6 +44,9 @@ def _read_json(request: Request) -> dict:
 
 
 def tenant_access_token() -> str:
+    global _TENANT_TOKEN, _TENANT_TOKEN_EXPIRES_AT
+    if _TENANT_TOKEN and time.monotonic() < _TENANT_TOKEN_EXPIRES_AT:
+        return _TENANT_TOKEN
     app_id = os.environ.get("LARK_APP_ID", "").strip()
     app_secret = os.environ.get("LARK_APP_SECRET", "").strip()
     if not app_id or not app_secret:
@@ -55,6 +61,12 @@ def tenant_access_token() -> str:
     token = payload.get("tenant_access_token", "")
     if not token:
         raise LarkAPIError("Lark did not return a tenant access token.")
+    # Lark tokens normally last two hours. Refresh one minute early and retain
+    # the token inside a warm Vercel function instead of requesting one on
+    # every browser refresh.
+    lifetime = max(int(payload.get("expire") or 7200) - 60, 60)
+    _TENANT_TOKEN = str(token)
+    _TENANT_TOKEN_EXPIRES_AT = time.monotonic() + lifetime
     return token
 
 
@@ -118,11 +130,11 @@ def lark_download(path: str, *, token: str, max_bytes: int = 20 * 1024 * 1024) -
     return content
 
 
-def paged_items(path: str, *, token: str) -> list[dict]:
+def paged_items(path: str, *, token: str, page_size: int = 100) -> list[dict]:
     items: list[dict] = []
     page_token = ""
     while True:
-        query: dict[str, str | int] = {"page_size": 100}
+        query: dict[str, str | int] = {"page_size": page_size}
         if page_token:
             query["page_token"] = page_token
         payload = lark_api("GET", path, token=token, query=query)

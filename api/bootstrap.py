@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from http.server import BaseHTTPRequestHandler
 
@@ -24,8 +25,20 @@ def build_bootstrap(base: LarkBase) -> dict:
             status=503,
         )
 
+    # Fetch independent tables together. On Lark-backed deployments these are
+    # network requests, so serial reads made every refresh noticeably slower.
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        workers_future = executor.submit(base.records, "Workers")
+        centers_future = executor.submit(base.records, "Cost Centers")
+        locations_future = executor.submit(base.records, "Location Entries")
+        days_future = executor.submit(base.records, "Work Days")
+        worker_records = workers_future.result()
+        center_records = centers_future.result()
+        location_records = locations_future.result()
+        work_days = days_future.result()
+
     workers = []
-    for index, record in enumerate(base.records("Workers"), start=1):
+    for index, record in enumerate(worker_records, start=1):
         name = text_value(field(record, "Name"))
         if not name:
             continue
@@ -39,14 +52,13 @@ def build_bootstrap(base: LarkBase) -> dict:
     workers.sort(key=lambda item: item["name"].casefold())
 
     cost_centers = []
-    for record in base.records("Cost Centers"):
+    for record in center_records:
         center_id = text_value(field(record, "Cost Center ID"))
         name = text_value(field(record, "Name"))
         if center_id and name and bool_value(field(record, "Active"), True):
             cost_centers.append({"id": center_id, "name": name})
     cost_centers.sort(key=lambda item: (item["name"].casefold(), item["id"]))
 
-    location_records = base.records("Location Entries")
     locations = sorted(
         {
             text_value(field(record, "Location"))
@@ -56,7 +68,6 @@ def build_bootstrap(base: LarkBase) -> dict:
         key=str.casefold,
     )
 
-    work_days = base.records("Work Days")
     dates = [date_value(field(record, "Work Date")) for record in work_days]
     dates = [value for value in dates if value]
     review_count = sum(
