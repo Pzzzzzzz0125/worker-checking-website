@@ -83,13 +83,15 @@ payroll or legal classification review.
 - If every location time is blank, a worked day defaults to eight hours.
 - When location times are entered, all named locations require complete,
   non-overlapping ranges.
-- Total Hours and Overtime remain visible and editable. Saving is blocked with
-  a `Time conflict` message when the location ranges, total, and overtime do
-  not agree. Changing Total Hours keeps the last location's Start and adjusts
-  its End when a valid same-day range can be calculated.
+- Total Hours and Overtime remain visible and editable. Changing either value
+  keeps the last location's Start and adjusts its End, so the location ranges,
+  total, and overtime stay synchronized. Saving is blocked with a clear
+  `Time conflict` message if imported or incomplete values still do not agree.
 - Cost-center search selections are committed automatically. Blue chips show
   which centers are actually attached to the location.
 - Copy/Paste reuses one worker's day information for another worker.
+- `清空记录` appears after Save, confirms the action, and deletes both the
+  Work Day and its linked Location Entries from Lark before resetting the row.
 - Browser drafts protect unsaved Daily Entry edits across refreshes.
 
 ### Worker entry
@@ -98,6 +100,7 @@ payroll or legal classification review.
 - Edit multiple dates using the same location-time and cost-center rules as
   Daily Entry.
 - Save one day or all edited days.
+- Clear an individual date with the same confirmed `清空记录` action.
 - Select multiple days and copy them to one or more workers when a crew shared
   the same schedule.
 

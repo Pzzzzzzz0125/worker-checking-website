@@ -1,6 +1,6 @@
 import unittest
 
-from report_handlers.entries import joined_days, save_rows
+from report_handlers.entries import clear_day, joined_days, save_rows
 
 
 def record(record_id, **fields):
@@ -113,6 +113,47 @@ class EntryTests(unittest.TestCase):
                 ],
                 self.worker_map,
             )
+
+    def test_clear_day_deletes_work_day_and_linked_locations(self):
+        class ClearBase(FakeBase):
+            def records(self, table_name, **kwargs):
+                del kwargs
+                if table_name == "Work Days":
+                    return [
+                        record(
+                            "day-record",
+                            **{
+                                "Work Day Key": "7|2026-07-02",
+                                "Worker Key": "7",
+                                "Work Date": "2026-07-02",
+                            },
+                        )
+                    ]
+                if table_name == "Location Entries":
+                    return [
+                        record(
+                            "location-record",
+                            **{
+                                "Location Entry Key": "7|2026-07-02|1|1",
+                                "Work Day Key": "7|2026-07-02",
+                                "Worker Key": "7",
+                                "Work Date": "2026-07-02",
+                            },
+                        )
+                    ]
+                return []
+
+        base = ClearBase()
+        result = clear_day(base, "7", "2026-07-02")
+        self.assertEqual(result["deleted_days"], 1)
+        self.assertEqual(result["deleted_locations"], 1)
+        self.assertEqual(
+            base.deleted,
+            [
+                ("Location Entries", "location-record"),
+                ("Work Days", "day-record"),
+            ],
+        )
 
     def test_joined_days_recombines_cost_center_rows(self):
         day = record(

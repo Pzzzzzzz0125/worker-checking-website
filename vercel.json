@@ -29,6 +29,10 @@
       "destination": "/api/reports?action=day"
     },
     {
+      "source": "/api/day/clear",
+      "destination": "/api/reports?action=day_clear"
+    },
+    {
       "source": "/api/worker-month",
       "destination": "/api/reports?action=worker_month"
     },
