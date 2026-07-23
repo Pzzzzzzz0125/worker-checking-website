@@ -44,6 +44,8 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
             {
                 "name": text_value(field(record, "Location")),
                 "hours": number_value(field(record, "Regular Hours")),
+                "start_time": text_value(field(record, "Start Time")),
+                "end_time": text_value(field(record, "End Time")),
                 "cost_center": {
                     "id": text_value(field(record, "Cost Center ID")),
                     "name": text_value(field(record, "Cost Center Name")),
@@ -71,6 +73,8 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
                     location_name,
                     {"name": location_name, "hours": 0.0, "cost_centers": []},
                 )
+                location["start_time"] = item["start_time"]
+                location["end_time"] = item["end_time"]
                 location["hours"] += item["hours"]
                 if center["id"] and center["id"] not in {x["id"] for x in location["cost_centers"]}:
                     location["cost_centers"].append(center)
