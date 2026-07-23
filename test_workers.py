@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from report_handlers.workers import list_workers, update_worker
+from report_handlers.workers import access_status, list_workers, update_worker
 
 
 def record(record_id, **fields):
@@ -52,6 +53,18 @@ class FakeBase:
 
 
 class WorkerProfileTests(unittest.TestCase):
+    def test_lark_admin_bypasses_password(self):
+        request = type("Request", (), {"headers": {"cookie": ""}})()
+        with patch.dict(
+            "os.environ",
+            {"LARK_ADMIN_OPEN_IDS": "ou-admin", "WORKER_ADMIN_PASSWORD": "secret"},
+            clear=False,
+        ):
+            result = access_status(request, {"sub": "ou-admin"})
+        self.assertTrue(result["authorized"])
+        self.assertEqual(result["access_type"], "lark_admin")
+        self.assertTrue(result["password_configured"])
+
     def test_list_workers_returns_full_master_profiles(self):
         base = FakeBase()
         workers = list_workers(base)
