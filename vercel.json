@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm --prefix frontend ci && npm --prefix frontend run build && cp static/app-ui/index.html static/index.html",
   "outputDirectory": "static",
+  "functions": {
+    "api/lark/migration.py": {
+      "maxDuration": 300
+    }
+  },
   "rewrites": [
     {
       "source": "/",
