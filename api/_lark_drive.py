@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import unicodedata
 from urllib.parse import quote
 
@@ -74,7 +75,48 @@ def exact_file(files: list[dict], name: str) -> dict:
 
 
 def download_file(item: dict, token: str) -> bytes:
-    return lark_download(
-        f"/drive/v1/medias/{quote(file_token(item), safe='')}/download",
+    source_token = file_token(item)
+    source_type = str(item.get("type") or "file").casefold()
+    encoded = quote(source_token, safe="")
+    if source_type == "sheet":
+        return _export_sheet(source_token, token)
+    try:
+        # Files listed directly in a Drive folder use the Drive file-download
+        # route. The media route is for attachments embedded in cloud docs.
+        return lark_download(f"/drive/v1/files/{encoded}/download", token=token)
+    except LarkAPIError as error:
+        if error.status != 404:
+            raise
+        # Retain compatibility with older uploaded assets returned as `file`.
+        return lark_download(f"/drive/v1/medias/{encoded}/download", token=token)
+
+
+def _export_sheet(source_token: str, token: str) -> bytes:
+    created = lark_api(
+        "POST",
+        "/drive/v1/export_tasks",
         token=token,
+        body={"file_extension": "xlsx", "token": source_token, "type": "sheet"},
     )
+    ticket = str((created.get("data") or {}).get("ticket") or "")
+    if not ticket:
+        raise LarkAPIError("Lark did not return a ticket for the spreadsheet export.")
+    for _ in range(30):
+        result_payload = lark_api(
+            "GET",
+            f"/drive/v1/export_tasks/{quote(ticket, safe='')}",
+            token=token,
+            query={"token": source_token},
+        )
+        result = (result_payload.get("data") or {}).get("result") or {}
+        exported_token = str(result.get("file_token") or "")
+        if exported_token:
+            return lark_download(
+                f"/drive/v1/export_tasks/file/{quote(exported_token, safe='')}/download",
+                token=token,
+            )
+        error_message = str(result.get("job_error_msg") or "")
+        if result.get("job_status") == 0 and error_message.casefold() not in {"", "success"}:
+            raise LarkAPIError(f"Lark spreadsheet export failed: {error_message}")
+        time.sleep(0.6)
+    raise LarkAPIError("Lark spreadsheet export timed out. Try the preview again.", status=504)
