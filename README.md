@@ -90,7 +90,7 @@ payroll or legal classification review.
 - Cost-center search selections are committed automatically. Blue chips show
   which centers are actually attached to the location.
 - Copy/Paste reuses one worker's day information for another worker.
-- `清空记录` appears after Save, confirms the action, and deletes both the
+- `Clear record` appears after Save, confirms the action, and deletes both the
   Work Day and its linked Location Entries from Lark before resetting the row.
 - Browser drafts protect unsaved Daily Entry edits across refreshes.
 
@@ -100,7 +100,7 @@ payroll or legal classification review.
 - Edit multiple dates using the same location-time and cost-center rules as
   Daily Entry.
 - Save one day or all edited days.
-- Clear an individual date with the same confirmed `清空记录` action.
+- Clear an individual date with the same confirmed `Clear record` action.
 - Select multiple days and copy them to one or more workers when a crew shared
   the same schedule.
 
