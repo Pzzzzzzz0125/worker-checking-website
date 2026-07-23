@@ -117,6 +117,40 @@ class LarkBase:
             "already_present": len(rows) - len(missing),
         }
 
+    def set_by_key(self, table_name: str, key_field: str, key: str, fields: dict) -> dict:
+        """Create or update one keyed record."""
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        matches = [
+            record
+            for record in self.records(table_name)
+            if text_value(field(record, key_field)) == key
+        ]
+        if len(matches) > 1:
+            raise LarkAPIError(f"{table_name} contains duplicate key {key!r}.", status=409)
+        base_path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records"
+        )
+        if matches:
+            record_id = str(matches[0].get("record_id") or "")
+            lark_api(
+                "POST",
+                f"{base_path}/batch_update",
+                token=self.token,
+                body={"records": [{"record_id": record_id, "fields": fields}]},
+            )
+            return {"created": False, "record_id": record_id}
+        payload = lark_api(
+            "POST",
+            f"{base_path}/batch_create",
+            token=self.token,
+            body={"records": [{"fields": fields}]},
+        )
+        created = ((payload.get("data") or {}).get("records") or [{}])[0]
+        return {"created": True, "record_id": created.get("record_id", "")}
+
 
 def field(record: dict, name: str):
     fields = record.get("fields")
