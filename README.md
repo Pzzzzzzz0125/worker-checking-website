@@ -71,12 +71,15 @@ payroll or legal classification review.
 - Record one or more locations for each worker.
 - Each location supports:
   - its own optional start and end time;
-  - automatically calculated location hours;
+  - editable location hours synchronized with its time range;
   - one or more required cost centers.
 - The first location defaults to `08:30–16:30`. A newly added location starts
   at the previous location's End and fills the remaining time toward eight
   hours. Changing an automatically connected previous End updates the next
   range.
+- Start, End, and Location Hours stay synchronized: changing Start preserves
+  that location's Hours and moves End; changing End recalculates Hours; changing
+  Hours preserves Start and moves End.
 - If every location time is blank, a worked day defaults to eight hours.
 - When location times are entered, all named locations require complete,
   non-overlapping ranges.
