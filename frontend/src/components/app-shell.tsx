@@ -1,9 +1,9 @@
-import { BrainCircuit, Building2, CalendarDays, ClipboardCheck, FileSpreadsheet, LayoutDashboard, MapPin, Menu, Smartphone, UserRound, X } from "lucide-react"
+import { BrainCircuit, Building2, CalendarDays, ClipboardCheck, FileSpreadsheet, LayoutDashboard, MapPin, Menu, Smartphone, UserRound, Users, X } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-export type View = "overview" | "payroll" | "locations" | "ai" | "daily" | "worker" | "transfer" | "review"
+export type View = "overview" | "payroll" | "locations" | "ai" | "daily" | "worker" | "workers" | "transfer" | "review"
 const groups: { label: string; items: { id: View; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { label: "Check", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "locations", label: "Locations", icon: MapPin },
@@ -12,7 +12,7 @@ const groups: { label: string; items: { id: View; label: string; icon: typeof La
     { id: "ai", label: "AI reading", icon: BrainCircuit }, { id: "daily", label: "Daily entry", icon: CalendarDays }, { id: "worker", label: "Worker entry", icon: UserRound },
   ]},
   { label: "Data", items: [
-    { id: "transfer", label: "Import & export", icon: FileSpreadsheet }, { id: "review", label: "Needs review", icon: Building2 },
+    { id: "workers", label: "Workers", icon: Users }, { id: "transfer", label: "Import & export", icon: FileSpreadsheet }, { id: "review", label: "Needs review", icon: Building2 },
   ]},
 ]
 const allItems = groups.flatMap(g => g.items)

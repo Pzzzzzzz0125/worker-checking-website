@@ -28,7 +28,7 @@ def build_bootstrap(base: LarkBase) -> dict:
     # Fetch independent tables together. On Lark-backed deployments these are
     # network requests, so serial reads made every refresh noticeably slower.
     with ThreadPoolExecutor(max_workers=2) as executor:
-        workers_future = executor.submit(base.records, "Workers")
+        workers_future = executor.submit(base.records, "Workers", cache_seconds=0)
         centers_future = executor.submit(base.records, "Cost Centers")
         worker_records = workers_future.result()
         center_records = centers_future.result()

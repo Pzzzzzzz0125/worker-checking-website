@@ -9,6 +9,7 @@ from report_handlers.location_detail import handler as LocationDetailHandler
 from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
 from report_handlers.payroll_worker_detail import handler as PayrollWorkerDetailHandler
+from report_handlers.workers import handler as WorkersHandler
 
 
 class handler(BaseHTTPRequestHandler):
@@ -22,6 +23,7 @@ class handler(BaseHTTPRequestHandler):
             "location_detail": LocationDetailHandler,
             "day": EntryHandler,
             "worker_month": EntryHandler,
+            "workers": WorkersHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -32,6 +34,9 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)
+            return
+        if self.action() == "workers":
+            WorkersHandler.do_POST(self)
             return
         if self.action() != "payroll_check":
             json_response(self, {"error": "Unknown report route."}, 404)

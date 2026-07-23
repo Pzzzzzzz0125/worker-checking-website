@@ -45,6 +45,10 @@
       "destination": "/api/reports?action=worker_days_copy"
     },
     {
+      "source": "/api/workers",
+      "destination": "/api/reports?action=workers"
+    },
+    {
       "source": "/",
       "destination": "/app-ui/index.html"
     }
