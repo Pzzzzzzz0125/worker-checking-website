@@ -6,7 +6,7 @@ from datetime import datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from api._lark import LarkAPIError, paged_items, tenant_access_token
+from api._lark import LarkAPIError, lark_api, paged_items, tenant_access_token
 
 
 REQUIRED_TABLES = {
@@ -61,6 +61,61 @@ class LarkBase:
         # Base record listing supports up to 500 rows per request. Using that
         # limit reduces a 6,800-row table from about 69 requests to 14.
         return paged_items(path, token=self.token, page_size=500)
+
+    def create_missing(
+        self,
+        table_name: str,
+        key_field: str,
+        rows: list[dict],
+        *,
+        batch_size: int = 500,
+    ) -> dict:
+        """Create only absent keyed rows so retrying cannot overwrite app edits."""
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        existing: dict[str, dict] = {}
+        for record in self.records(table_name):
+            key = text_value(field(record, key_field))
+            if not key:
+                continue
+            if key in existing:
+                raise LarkAPIError(
+                    f"{table_name} contains duplicate {key_field} value {key!r}.",
+                    status=409,
+                )
+            existing[key] = record
+        supplied_keys: set[str] = set()
+        missing = []
+        for row in rows:
+            key = text_value(row.get(key_field))
+            if not key:
+                raise LarkAPIError(f"A {table_name} migration row is missing {key_field}.")
+            if key in supplied_keys:
+                raise LarkAPIError(
+                    f"Migration data contains duplicate {table_name} key {key!r}.",
+                    status=409,
+                )
+            supplied_keys.add(key)
+            if key not in existing:
+                missing.append(row)
+        path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records/batch_create"
+        )
+        for offset in range(0, len(missing), batch_size):
+            batch = missing[offset : offset + batch_size]
+            lark_api(
+                "POST",
+                path,
+                token=self.token,
+                body={"records": [{"fields": row} for row in batch]},
+            )
+        return {
+            "expected": len(rows),
+            "created": len(missing),
+            "already_present": len(rows) - len(missing),
+        }
 
 
 def field(record: dict, name: str):

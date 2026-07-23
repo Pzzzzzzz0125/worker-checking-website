@@ -1,7 +1,8 @@
 import unittest
 from pathlib import Path
 
-from api._migration_preview import _worker_registry, build_preview
+from api._migration_preview import _location_hours, _worker_registry, build_preview
+from worklog_parser import parse_work_cell
 
 
 ROOT = Path(__file__).parent
@@ -31,6 +32,12 @@ class MigrationPreviewTests(unittest.TestCase):
         self.assertEqual(len(workers), 3)
         self.assertEqual(aliases["roberto rojas"], aliases["robert rojas"])
         self.assertNotEqual(aliases["chris lee"], aliases["chris lee#2"])
+
+    def test_location_hours_preserve_regular_and_overtime_totals(self):
+        parsed = parse_work_cell("432(3);1151(5), ot 2h")
+        self.assertEqual(_location_hours(parsed), [(3.0, 0.0), (5.0, 2.0)])
+        equal = parse_work_cell("444;111, ot 2h")
+        self.assertEqual(_location_hours(equal), [(5.0, 0.0), (3.0, 2.0)])
 
     @unittest.skipUnless(
         (ROOT / "Speed Payroll.xlsx").exists(),
