@@ -35,6 +35,10 @@ def query_action(handler: BaseHTTPRequestHandler) -> str:
     return parse_qs(urlparse(handler.path).query).get("action", [""])[0]
 
 
+def session(handler: BaseHTTPRequestHandler) -> dict | None:
+    return verify_payload(cookie_value(handler, "workforce_session"), 12 * 60 * 60)
+
+
 def read_body(handler: BaseHTTPRequestHandler) -> dict:
     length = int(handler.headers.get("Content-Length", "0"))
     value = json.loads(handler.rfile.read(length) or b"{}")
@@ -310,11 +314,8 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
 
 
 class handler(BaseHTTPRequestHandler):
-    def session(self) -> dict | None:
-        return verify_payload(cookie_value(self, "workforce_session"), 12 * 60 * 60)
-
     def do_GET(self) -> None:
-        if not self.session():
+        if not session(self):
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         query = parse_qs(urlparse(self.path).query)
@@ -359,7 +360,7 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
 
     def do_POST(self) -> None:
-        if not self.session():
+        if not session(self):
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         try:
