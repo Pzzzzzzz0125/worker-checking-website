@@ -164,7 +164,7 @@ def output_day(item: dict, worker: dict, work_date: str) -> dict:
     return {
         **item,
         "worker_id": worker["id"],
-        "worker_name": item.get("worker_name") or worker["name"],
+        "worker_name": worker["name"] or item.get("worker_name"),
         "work_date": work_date,
     }
 

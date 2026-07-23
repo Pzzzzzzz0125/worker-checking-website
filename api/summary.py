@@ -85,7 +85,7 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
             {
                 "id": record.get("record_id", ""),
                 "worker_id": int(worker_key) if worker_key.isdigit() else 0,
-                "worker_name": text_value(field(record, "Worker Name")) or workers.get(worker_key, ""),
+                "worker_name": workers.get(worker_key, "") or text_value(field(record, "Worker Name")),
                 "work_date": work_date,
                 "status": status,
                 "total_hours": number_value(field(record, "Total Hours")),

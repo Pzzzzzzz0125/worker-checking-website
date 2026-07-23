@@ -105,6 +105,17 @@ payroll or legal classification review.
 - Select multiple days and copy them to one or more workers when a crew shared
   the same schedule.
 
+### Worker management
+
+- View the complete Workers master list and search by name, worker key, alias,
+  or classification.
+- Edit worker name, W-2/1099 classification, active status, daily salary/rate,
+  display order, aliases, and private worker notes.
+- Worker key remains read-only, and normalized name is regenerated when the
+  worker name changes.
+- Saved classification and rate changes flow into payroll estimates; saved
+  names and active status refresh the entry-page worker lists.
+
 ### Lark Drive migration
 
 - The application can verify the three authoritative Lark Drive workbooks

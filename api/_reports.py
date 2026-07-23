@@ -123,7 +123,7 @@ def load_report_data(
                 "work_day_id": day_key,
                 "worker_id": worker.get("id", 0),
                 "worker_key": worker_key,
-                "worker_name": text_value(field(record, "Worker Name")) or worker.get("name", ""),
+                "worker_name": worker.get("name", "") or text_value(field(record, "Worker Name")),
                 "date": work_date,
                 "status": text_value(field(record, "Status")) or "worked",
                 "total_hours": number_value(field(record, "Total Hours")),
