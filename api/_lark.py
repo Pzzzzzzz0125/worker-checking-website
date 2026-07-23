@@ -130,14 +130,21 @@ def lark_download(path: str, *, token: str, max_bytes: int = 20 * 1024 * 1024) -
     return content
 
 
-def paged_items(path: str, *, token: str, page_size: int = 100) -> list[dict]:
+def paged_items(
+    path: str,
+    *,
+    token: str,
+    page_size: int = 100,
+    query: dict[str, str | int] | None = None,
+) -> list[dict]:
     items: list[dict] = []
     page_token = ""
     while True:
-        query: dict[str, str | int] = {"page_size": page_size}
+        page_query: dict[str, str | int] = dict(query or {})
+        page_query["page_size"] = page_size
         if page_token:
-            query["page_token"] = page_token
-        payload = lark_api("GET", path, token=token, query=query)
+            page_query["page_token"] = page_token
+        payload = lark_api("GET", path, token=token, query=page_query)
         data = payload.get("data") or {}
         page_items = data.get("items") or []
         if not isinstance(page_items, list):

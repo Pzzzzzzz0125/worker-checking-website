@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase, date_value, field, number_value, text_value
+from api._lark_base import LarkBase, date_range_filter, date_value, field, formula_string, number_value, text_value
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -16,10 +16,16 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
     # slowest individual request.
     if hasattr(base, "table_ids"):
         base.table_ids()
+    filters = [date_range_filter("Work Date", start, end)]
+    if selected_worker:
+        filters.append(f"CurrentValue.[Worker Key]={formula_string(selected_worker)}")
+    record_filter = filters[0] if len(filters) == 1 else f"AND({','.join(filters)})"
     with ThreadPoolExecutor(max_workers=3) as executor:
         workers_future = executor.submit(base.records, "Workers")
-        allocations_future = executor.submit(base.records, "Location Entries")
-        days_future = executor.submit(base.records, "Work Days")
+        allocations_future = executor.submit(
+            base.records, "Location Entries", filter_formula=record_filter,
+        )
+        days_future = executor.submit(base.records, "Work Days", filter_formula=record_filter)
         worker_records = workers_future.result()
         allocation_records = allocations_future.result()
         day_records = days_future.result()
