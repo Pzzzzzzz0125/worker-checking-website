@@ -10,7 +10,7 @@ from report_handlers.location_detail import handler as LocationDetailHandler
 from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
 from report_handlers.payroll_worker_detail import handler as PayrollWorkerDetailHandler
-from report_handlers.workers import handler as WorkersHandler
+from report_handlers.workers import handler as WorkersHandler, require_payroll_access
 
 
 class handler(BaseHTTPRequestHandler):
@@ -26,10 +26,13 @@ class handler(BaseHTTPRequestHandler):
             "worker_month": EntryHandler,
             "workers": WorkersHandler,
             "workers_access": WorkersHandler,
+            "payroll_access": WorkersHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
             json_response(self, {"error": "Unknown report route."}, 404)
+            return
+        if self.action() in {"payroll", "payroll_worker_detail"} and not require_payroll_access(self):
             return
         selected.do_GET(self)
 
@@ -40,10 +43,12 @@ class handler(BaseHTTPRequestHandler):
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)
             return
-        if self.action() in {"workers", "workers_unlock"}:
+        if self.action() in {"workers", "workers_unlock", "payroll_unlock"}:
             WorkersHandler.do_POST(self)
             return
         if self.action() != "payroll_check":
             json_response(self, {"error": "Unknown report route."}, 404)
+            return
+        if not require_payroll_access(self):
             return
         PayrollCheckHandler.do_POST(self)

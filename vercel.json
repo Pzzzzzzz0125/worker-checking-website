@@ -16,6 +16,14 @@
       "destination": "/api/reports?action=payroll"
     },
     {
+      "source": "/api/payroll/access",
+      "destination": "/api/reports?action=payroll_access"
+    },
+    {
+      "source": "/api/payroll/unlock",
+      "destination": "/api/reports?action=payroll_unlock"
+    },
+    {
       "source": "/api/ai/parse",
       "destination": "/api/reports?action=ai_parse"
     },
