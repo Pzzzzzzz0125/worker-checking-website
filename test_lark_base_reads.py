@@ -1,6 +1,6 @@
 import unittest
 
-from api.bootstrap import build_bootstrap
+from api.bootstrap import build_bootstrap, build_bootstrap_details
 from api.summary import build_summary
 
 
@@ -67,9 +67,11 @@ class LarkBaseReadTests(unittest.TestCase):
         result = build_bootstrap(FakeBase())
         self.assertEqual(result["workers"], [{"id": 7, "name": "Ana Diaz", "active": 1}])
         self.assertEqual(result["cost_centers"], [{"id": "CC-12", "name": "Framing"}])
-        self.assertEqual(result["locations"], ["444 Pocatello"])
-        self.assertEqual(result["review_count"], 1)
-        self.assertEqual(result["last_recorded_date"], "2026-07-01")
+        self.assertEqual(result["locations"], [])
+        details = build_bootstrap_details(FakeBase())
+        self.assertEqual(details["locations"], ["444 Pocatello"])
+        self.assertEqual(details["review_count"], 1)
+        self.assertEqual(details["last_recorded_date"], "2026-07-01")
 
     def test_summary_joins_days_and_allocations(self):
         result = build_summary(FakeBase(), "2026-07-01", "2026-07-15")

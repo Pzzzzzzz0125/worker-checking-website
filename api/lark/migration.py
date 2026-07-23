@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
@@ -18,7 +19,7 @@ from api._lark_drive import (
     file_name,
     folder_files,
 )
-from api._migration_preview import build_dataset, build_preview
+from api._migration_preview import build_dataset
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -28,6 +29,13 @@ FILES = (
     "Speed Payroll.xlsx",
 )
 CONFIRMATION = "IMPORT VERIFIED PREVIEW"
+IMPORT_STAGES = {
+    "workers": ("Workers", "Worker Key"),
+    "cost_centers": ("Cost Centers", "Cost Center ID"),
+    "work_days": ("Work Days", "Work Day Key"),
+    "location_entries": ("Location Entries", "Location Entry Key"),
+}
+_DATASET_CACHE: tuple[float, list[dict], dict] | None = None
 
 
 def _admin_session(handler: BaseHTTPRequestHandler) -> dict | None:
@@ -54,14 +62,24 @@ def _drive_contents(token: str) -> tuple[list[dict], list[bytes]]:
     return selected, contents
 
 
+def _cloud_dataset(token: str) -> tuple[list[dict], dict]:
+    global _DATASET_CACHE
+    if _DATASET_CACHE and time.monotonic() < _DATASET_CACHE[0]:
+        return _DATASET_CACHE[1], _DATASET_CACHE[2]
+    selected, contents = _drive_contents(token)
+    dataset = build_dataset(*contents, year=2026)
+    _DATASET_CACHE = (time.monotonic() + 10 * 60, selected, dataset)
+    return selected, dataset
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not _admin_session(self):
             return
         try:
             token = tenant_access_token()
-            selected, contents = _drive_contents(token)
-            preview = build_preview(*contents, year=2026)
+            selected, dataset = _cloud_dataset(token)
+            preview = dataset["preview"]
             preview["files"] = [
                 {
                     "name": file_name(item),
@@ -94,9 +112,16 @@ class handler(BaseHTTPRequestHandler):
             )
             return
         try:
+            stage = str(body.get("stage") or "")
+            if stage not in {*IMPORT_STAGES, "audit"}:
+                json_response(
+                    self,
+                    {"error": "Choose a valid resumable migration stage."},
+                    400,
+                )
+                return
             token = tenant_access_token()
-            _selected, contents = _drive_contents(token)
-            dataset = build_dataset(*contents, year=2026)
+            _selected, dataset = _cloud_dataset(token)
             preview = dataset["preview"]
             if not preview["safe_to_write"]:
                 raise LarkAPIError("Migration preview checks did not pass.", status=409)
@@ -107,43 +132,42 @@ class handler(BaseHTTPRequestHandler):
                     "Lark Base setup is incomplete. Missing: " + ", ".join(missing_tables),
                     status=503,
                 )
-            results = {}
-            for table_name, key_field in (
-                ("Workers", "Worker Key"),
-                ("Cost Centers", "Cost Center ID"),
-                ("Work Days", "Work Day Key"),
-                ("Location Entries", "Location Entry Key"),
-            ):
-                results[table_name] = base.create_missing(
+            if stage in IMPORT_STAGES:
+                table_name, key_field = IMPORT_STAGES[stage]
+                result = base.create_missing(
                     table_name,
                     key_field,
                     dataset["tables"][table_name],
                 )
-            now = int(datetime.now(tz=ZoneInfo("America/Los_Angeles")).timestamp() * 1000)
-            results["Audit Log"] = base.create_missing(
-                "Audit Log",
-                "Audit Key",
-                [
-                    {
-                        "Audit Key": "migration|2026-standardized-v1",
-                        "Actor ID": session.get("sub", ""),
-                        "Actor Name": session.get("name", ""),
-                        "Action": "verified-workbook-migration",
-                        "Entity Type": "Lark Base",
-                        "Entity Key": "2026-standardized-v1",
-                        "Old JSON": "",
-                        "New JSON": json.dumps(preview["counts"], separators=(",", ":")),
-                        "Source": "lark-drive-migration",
-                        "Created At": now,
-                    }
-                ],
-            )
+            else:
+                table_name = "Audit Log"
+                now = int(datetime.now(tz=ZoneInfo("America/Los_Angeles")).timestamp() * 1000)
+                result = base.create_missing(
+                    "Audit Log",
+                    "Audit Key",
+                    [
+                        {
+                            "Audit Key": "migration|2026-standardized-v1",
+                            "Actor ID": session.get("sub", ""),
+                            "Actor Name": session.get("name", ""),
+                            "Action": "verified-workbook-migration",
+                            "Entity Type": "Lark Base",
+                            "Entity Key": "2026-standardized-v1",
+                            "Old JSON": "",
+                            "New JSON": json.dumps(preview["counts"], separators=(",", ":")),
+                            "Source": "lark-drive-migration",
+                            "Created At": now,
+                        }
+                    ],
+                )
             json_response(
                 self,
                 {
-                    "mode": "import_complete",
+                    "mode": "stage_complete",
+                    "stage": stage,
+                    "table": table_name,
                     "retry_safe": True,
-                    "results": results,
+                    "result": result,
                     "preview": {
                         "counts": preview["counts"],
                         "totals": preview["totals"],
