@@ -101,6 +101,7 @@ payroll or legal classification review.
   Daily Entry.
 - Save one day or all edited days.
 - Clear an individual date with the same confirmed `Clear record` action.
+- Select or deselect every day in the loaded month with one button.
 - Select multiple days and copy them to one or more workers when a crew shared
   the same schedule.
 
