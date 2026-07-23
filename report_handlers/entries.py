@@ -90,7 +90,13 @@ def joined_days(day_records: list[dict], location_records: list[dict]) -> dict[s
             continue
         location = allocations[day_key].setdefault(
             location_name.casefold(),
-            {"name": location_name, "hours": 0.0, "cost_centers": []},
+            {
+                "name": location_name,
+                "hours": 0.0,
+                "start_time": text_value(field(record, "Start Time")),
+                "end_time": text_value(field(record, "End Time")),
+                "cost_centers": [],
+            },
         )
         location["hours"] += number_value(field(record, "Regular Hours")) + number_value(
             field(record, "Overtime Hours")
@@ -106,6 +112,19 @@ def joined_days(day_records: list[dict], location_records: list[dict]) -> dict[s
         day_key = text_value(field(record, "Work Day Key"))
         if not day_key:
             continue
+        source = text_value(field(record, "Source"))
+        location_items = []
+        for item in allocations.get(day_key, {}).values():
+            location_items.append(
+                {
+                    **item,
+                    "hours": round(item["hours"], 2),
+                    # The original spreadsheet migration did not contain time
+                    # ranges; its 08:30–16:30 values were placeholders.
+                    "start_time": "" if source == "lark-drive-migration" else item["start_time"],
+                    "end_time": "" if source == "lark-drive-migration" else item["end_time"],
+                }
+            )
         output[day_key] = {
             "day_id": record.get("record_id", ""),
             "worker_key": text_value(field(record, "Worker Key")),
@@ -118,10 +137,7 @@ def joined_days(day_records: list[dict], location_records: list[dict]) -> dict[s
             "start_time": text_value(field(record, "Start Time")),
             "end_time": text_value(field(record, "End Time")),
             "notes": text_value(field(record, "Notes")),
-            "locations": [
-                {**item, "hours": round(item["hours"], 2)}
-                for item in allocations.get(day_key, {}).values()
-            ],
+            "locations": location_items,
         }
     return output
 
@@ -135,8 +151,8 @@ def blank_day(worker: dict, work_date: str) -> dict:
         "total_hours": 8,
         "overtime_hours": 0,
         "extra_pay": 0,
-        "start_time": "08:30",
-        "end_time": "16:30",
+        "start_time": "",
+        "end_time": "",
         "notes": "",
         "locations": [],
     }
@@ -178,9 +194,6 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
     status = str(raw.get("status") or "worked").casefold()
     if status not in {"worked", "off"}:
         raise ValueError("Status must be worked or off.")
-    total = float(raw.get("total_hours") or 0) if status == "worked" else 0.0
-    if total < 0 or total > 24:
-        raise ValueError("Hours must be between 0 and 24.")
     locations = raw.get("locations") or []
     if status == "worked" and not locations:
         raise ValueError(f"Add a location for {worker['name']} on {work_date.isoformat()}.")
@@ -194,22 +207,73 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
             raise ValueError(f"Choose a cost center for {name}.")
         if any(not str(center.get("id") or "").strip() for center in centers):
             raise ValueError(f"Cost center ID is missing for {name}.")
+        start_time = str(location.get("start_time") or "")
+        end_time = str(location.get("end_time") or "")
         hours = location.get("hours")
         hours = None if hours in (None, "") else float(hours)
-        cleaned.append({"name": name, "hours": hours, "cost_centers": centers})
+        cleaned.append(
+            {
+                "name": name,
+                "hours": hours,
+                "start_time": start_time,
+                "end_time": end_time,
+                "cost_centers": centers,
+            }
+        )
     if status == "worked" and not cleaned:
         raise ValueError("Add at least one valid location.")
-    specified = [item["hours"] is not None for item in cleaned]
-    if specified and any(specified) and not all(specified):
-        raise ValueError("Enter hours for every location, or leave all location hours blank.")
+    entered_times = [bool(item["start_time"] or item["end_time"]) for item in cleaned]
+    calculated_total = None
+    if any(entered_times):
+        if not all(entered_times) or any(not item["start_time"] or not item["end_time"] for item in cleaned):
+            raise ValueError(
+                "Time conflict: enter both Start and End for every location, or leave all location times blank."
+            )
+        ranges = []
+        for location in cleaned:
+            try:
+                start_hour, start_minute = (int(value) for value in location["start_time"].split(":"))
+                end_hour, end_minute = (int(value) for value in location["end_time"].split(":"))
+            except (ValueError, TypeError):
+                raise ValueError(f"Time conflict: invalid time for {location['name']}.")
+            start_minutes = start_hour * 60 + start_minute
+            end_minutes = end_hour * 60 + end_minute
+            if end_minutes <= start_minutes:
+                raise ValueError(f"Time conflict: {location['name']} must end after it starts.")
+            location["hours"] = round((end_minutes - start_minutes) / 60, 2)
+            ranges.append((start_minutes, end_minutes, location["name"]))
+        ranges.sort()
+        for previous, current in zip(ranges, ranges[1:]):
+            if current[0] < previous[1]:
+                raise ValueError(f"Time conflict: {previous[2]} overlaps {current[2]}.")
+        calculated_total = round(sum(float(item["hours"]) for item in cleaned), 2)
+    supplied_total = raw.get("total_hours")
+    total = (
+        calculated_total if supplied_total in (None, "") and calculated_total is not None
+        else 8.0 if supplied_total in (None, "")
+        else float(supplied_total)
+    ) if status == "worked" else 0.0
+    if total < 0 or total > 24:
+        raise ValueError("Hours must be between 0 and 24.")
+    if calculated_total is not None and abs(calculated_total - total) > 0.01:
+        raise ValueError(
+            f"Time conflict: location ranges total {calculated_total:g}h, but Total hours is {total:g}h."
+        )
+    expected_overtime = max(total - 8, 0)
+    overtime = float(raw.get("overtime_hours") or 0)
+    if abs(expected_overtime - overtime) > 0.01:
+        raise ValueError(
+            f"Time conflict: {total:g} total hours requires {expected_overtime:g} overtime hours, not {overtime:g}h."
+        )
     return {
         "worker": worker,
         "date": work_date,
         "status": status,
         "total": total,
+        "overtime": overtime,
         "extra": float(raw.get("extra_pay") or 0) if status == "worked" else 0.0,
-        "start": str(raw.get("start_time") or "08:30") if status == "worked" else "",
-        "end": str(raw.get("end_time") or "16:30") if status == "worked" else "",
+        "start": "",
+        "end": "",
         "notes": str(raw.get("notes") or "").strip(),
         "locations": cleaned,
     }
@@ -238,7 +302,7 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
                 "Work Date": date_millis(item["date"]),
                 "Status": item["status"],
                 "Total Hours": round(item["total"], 2),
-                "Overtime Hours": round(max(item["total"] - 8, 0), 2),
+                "Overtime Hours": round(item["overtime"], 2),
                 "Extra Pay": round(item["extra"], 2),
                 "Start Time": item["start"],
                 "End Time": item["end"],
@@ -258,13 +322,14 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
             else item["total"] / max(len(locations), 1)
             for location in locations
         ]
+        regular_remaining = min(item["total"], 8)
+        overtime_remaining = item["overtime"]
         for location_index, (location, location_hours) in enumerate(zip(locations, allocated), 1):
             centers = location["cost_centers"]
-            regular_total = round(
-                location_hours * (min(item["total"], 8) / item["total"] if item["total"] else 0),
-                2,
-            )
-            overtime_total = round(location_hours - regular_total, 2)
+            regular_total = round(min(location_hours, regular_remaining), 2)
+            regular_remaining = round(max(regular_remaining - regular_total, 0), 2)
+            overtime_total = round(min(max(location_hours - regular_total, 0), overtime_remaining), 2)
+            overtime_remaining = round(max(overtime_remaining - overtime_total, 0), 2)
             regular_used = 0.0
             overtime_used = 0.0
             for center_index, center in enumerate(centers, 1):
@@ -288,8 +353,8 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
                         "Location": location["name"],
                         "Cost Center ID": str(center.get("id") or "").strip(),
                         "Cost Center Name": str(center.get("name") or "").strip(),
-                        "Start Time": item["start"],
-                        "End Time": item["end"],
+                        "Start Time": location["start_time"],
+                        "End Time": location["end_time"],
                         "Regular Hours": regular_share,
                         "Overtime Hours": overtime_share,
                         "Display Order": location_index,

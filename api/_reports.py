@@ -96,6 +96,8 @@ def load_report_data(
                 "hours": round(regular + overtime, 2),
                 "regular_hours": regular,
                 "overtime_hours": overtime,
+                "start_time": text_value(field(record, "Start Time")),
+                "end_time": text_value(field(record, "End Time")),
                 "cost_centers": (
                     [{"id": center_id, "name": center_name}] if center_id else []
                 ),

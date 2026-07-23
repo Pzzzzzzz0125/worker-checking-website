@@ -4,6 +4,8 @@ export type WorkLocation = {
   id?: number
   name: string
   hours: number | null
+  start_time: string
+  end_time: string
   cost_centers: CostCenter[]
 }
 export type WorkRecord = {

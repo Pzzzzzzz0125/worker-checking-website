@@ -64,7 +64,7 @@ button:disabled { cursor: not-allowed; }
 .avatar { display: grid; place-items: center; flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; background: #dbeafe; color: #1d4ed8; font-size: 11px; font-weight: 800; }
 .mobile-nav { display: none; }
 .entry-grid { display: grid; grid-template-columns: minmax(150px,1.2fr) minmax(150px,1fr) 100px 100px; gap: 12px; align-items: end; }
-.location-row { display: grid; grid-template-columns: minmax(180px,1.5fr) 100px minmax(190px,1fr) auto; gap: 10px; align-items: start; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.location-row { display: grid; grid-template-columns: minmax(170px,1.4fr) 105px 105px 120px minmax(190px,1fr) auto; gap: 10px; align-items: start; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .safe-bottom { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 
 @media (max-width: 1050px) {
