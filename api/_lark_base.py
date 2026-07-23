@@ -181,6 +181,74 @@ class LarkBase:
         self.invalidate_records(table_name)
         return {"created": True, "record_id": created.get("record_id", "")}
 
+    def batch_set_by_key(
+        self,
+        table_name: str,
+        key_field: str,
+        rows: list[dict],
+        *,
+        existing_records: list[dict] | None = None,
+    ) -> dict:
+        """Create or update keyed rows in Lark's 500-record batches."""
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        existing_records = existing_records if existing_records is not None else self.records(table_name)
+        existing = {
+            text_value(field(record, key_field)): record
+            for record in existing_records
+            if text_value(field(record, key_field))
+        }
+        supplied: set[str] = set()
+        creates: list[dict] = []
+        updates: list[dict] = []
+        for row in rows:
+            key = text_value(row.get(key_field))
+            if not key or key in supplied:
+                raise LarkAPIError(f"Invalid or duplicate {table_name} key {key!r}.", status=400)
+            supplied.add(key)
+            match = existing.get(key)
+            if match:
+                updates.append({"record_id": match.get("record_id", ""), "fields": row})
+            else:
+                creates.append({"fields": row})
+        base_path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records"
+        )
+        for offset in range(0, len(updates), 500):
+            lark_api(
+                "POST", f"{base_path}/batch_update", token=self.token,
+                body={"records": updates[offset : offset + 500]},
+            )
+        for offset in range(0, len(creates), 500):
+            lark_api(
+                "POST", f"{base_path}/batch_create", token=self.token,
+                body={"records": creates[offset : offset + 500]},
+            )
+        if creates or updates:
+            self.invalidate_records(table_name)
+        return {"created": len(creates), "updated": len(updates)}
+
+    def delete_record_ids(self, table_name: str, record_ids: list[str]) -> int:
+        record_ids = [value for value in dict.fromkeys(record_ids) if value]
+        if not record_ids:
+            return 0
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records/batch_delete"
+        )
+        for offset in range(0, len(record_ids), 500):
+            lark_api(
+                "POST", path, token=self.token,
+                body={"records": record_ids[offset : offset + 500]},
+            )
+        self.invalidate_records(table_name)
+        return len(record_ids)
+
 
 def field(record: dict, name: str):
     fields = record.get("fields")

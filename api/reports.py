@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._shared import json_response
+from report_handlers.entries import handler as EntryHandler
 from report_handlers.location_detail import handler as LocationDetailHandler
 from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
@@ -19,6 +20,8 @@ class handler(BaseHTTPRequestHandler):
             "payroll": PayrollHandler,
             "payroll_worker_detail": PayrollWorkerDetailHandler,
             "location_detail": LocationDetailHandler,
+            "day": EntryHandler,
+            "worker_month": EntryHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -27,6 +30,9 @@ class handler(BaseHTTPRequestHandler):
         selected.do_GET(self)
 
     def do_POST(self) -> None:
+        if self.action() in {"day", "worker_days", "worker_days_copy"}:
+            EntryHandler.do_POST(self)
+            return
         if self.action() != "payroll_check":
             json_response(self, {"error": "Unknown report route."}, 404)
             return
