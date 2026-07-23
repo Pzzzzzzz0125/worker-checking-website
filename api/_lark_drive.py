@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from urllib.parse import quote
 
 from api._lark import LarkAPIError, lark_api, lark_download
@@ -44,10 +46,23 @@ def file_token(item: dict) -> str:
     return str(item.get("token") or item.get("file_token") or "").strip()
 
 
+def normalized_file_name(value: str) -> str:
+    """Match harmless Lark filename changes without accepting a different title."""
+    value = value.translate(str.maketrans({"’": "'", "‘": "'", "‛": "'"}))
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    words = re.findall(r"[a-z0-9]+", value.casefold())
+    if words[-1:] == ["xlsx"]:
+        words.pop()
+    return " ".join(words)
+
+
 def exact_file(files: list[dict], name: str) -> dict:
-    matches = [item for item in files if file_name(item) == name]
+    expected = normalized_file_name(name)
+    matches = [item for item in files if normalized_file_name(file_name(item)) == expected]
     if not matches:
-        raise LarkAPIError(f'Lark Drive folder is missing "{name}".', status=404)
+        available = [file_name(item) for item in files if file_name(item)][:10]
+        detail = f" Available files: {', '.join(available)}." if available else " The folder appears empty."
+        raise LarkAPIError(f'Lark Drive folder is missing "{name}".{detail}', status=404)
     if len(matches) > 1:
         raise LarkAPIError(
             f'Lark Drive folder contains more than one file named "{name}". Keep only the current copy.',
