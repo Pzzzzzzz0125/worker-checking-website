@@ -82,6 +82,42 @@ def lark_api(
     return _read_json(request)
 
 
+def lark_download(path: str, *, token: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+    """Download a binary Lark resource with a conservative serverless size cap."""
+    request = Request(
+        f"{LARK_API}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            content_length = response.headers.get("Content-Length", "")
+            if content_length and int(content_length) > max_bytes:
+                raise LarkAPIError(
+                    f"Lark file exceeds the {max_bytes // (1024 * 1024)} MB preview limit.",
+                    status=413,
+                )
+            content = response.read(max_bytes + 1)
+    except HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode("utf-8"))
+            message = detail.get("msg") or detail.get("message") or str(error)
+            code = detail.get("code")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            message = str(error)
+            code = None
+        status = 403 if error.code == 403 else error.code
+        raise LarkAPIError(message, code=code, status=status) from error
+    except (URLError, TimeoutError, ValueError) as error:
+        raise LarkAPIError(f"Could not download the Lark file: {error}") from error
+    if len(content) > max_bytes:
+        raise LarkAPIError(
+            f"Lark file exceeds the {max_bytes // (1024 * 1024)} MB preview limit.",
+            status=413,
+        )
+    return content
+
+
 def paged_items(path: str, *, token: str) -> list[dict]:
     items: list[dict] = []
     page_token = ""
