@@ -25,6 +25,22 @@
       "destination": "/api/reports?action=location_detail"
     },
     {
+      "source": "/api/day",
+      "destination": "/api/reports?action=day"
+    },
+    {
+      "source": "/api/worker-month",
+      "destination": "/api/reports?action=worker_month"
+    },
+    {
+      "source": "/api/worker-days",
+      "destination": "/api/reports?action=worker_days"
+    },
+    {
+      "source": "/api/worker-days/copy",
+      "destination": "/api/reports?action=worker_days_copy"
+    },
+    {
       "source": "/",
       "destination": "/app-ui/index.html"
     }
