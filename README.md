@@ -73,12 +73,17 @@ payroll or legal classification review.
   - its own optional start and end time;
   - automatically calculated location hours;
   - one or more required cost centers.
+- The first location defaults to `08:30–16:30`. A newly added location starts
+  at the previous location's End and fills the remaining time toward eight
+  hours. Changing an automatically connected previous End updates the next
+  range.
 - If every location time is blank, a worked day defaults to eight hours.
 - When location times are entered, all named locations require complete,
   non-overlapping ranges.
 - Total Hours and Overtime remain visible and editable. Saving is blocked with
   a `Time conflict` message when the location ranges, total, and overtime do
-  not agree.
+  not agree. Changing Total Hours keeps the last location's Start and adjusts
+  its End when a valid same-day range can be calculated.
 - Cost-center search selections are committed automatically. Blue chips show
   which centers are actually attached to the location.
 - Copy/Paste reuses one worker's day information for another worker.
