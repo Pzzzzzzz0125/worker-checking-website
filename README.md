@@ -37,10 +37,12 @@ Lark Base workforce records + Lark Drive source workbooks
 ### Overview
 
 - Choose a date range and optionally a worker.
-- Review total hours, active workers, worked/off days, extra pay, and daily
-  workload.
-- Search and sort the loaded work-record table.
-- See locations, linked cost centers, and recorded location time ranges.
+- Review total, regular, and overtime hours; active workers; worked/off days;
+  average workday; extra pay; and latest activity.
+- Search the latest 50 activity rows. Location and cost-center detail remains on
+  the dedicated reporting pages so Overview needs only one filtered Base read.
+- Returning to the same Overview filter reuses a five-minute browser cache
+  unless an app write occurred or the user clicks Refresh.
 
 ### Payroll check
 
@@ -62,7 +64,12 @@ payroll or legal classification review.
 - Search a known location and choose a date range.
 - See total workers, allocated hours, distinct work days, and the first/last
   recorded dates.
-- Review each worker's hours and days at that location.
+- Review each worker's hours, days, classification, and estimated labor cost at
+  that location.
+- Location estimates use the saved eight-hour daily rate, California-weighted
+  overtime for W-2 workers, and straight time for 1099 contractors. Extra pay
+  is excluded because it is not assigned to a specific location.
+- Review the cost centers connected to the selected location.
 
 ### Daily entry
 
