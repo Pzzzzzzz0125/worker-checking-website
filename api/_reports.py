@@ -59,13 +59,16 @@ def load_report_data(
         locations_future = executor.submit(
             base.records, "Location Entries", filter_formula=location_filter,
         )
-        checks_future = executor.submit(
-            base.records, "Payroll Checks", filter_formula=check_filter,
+        checks_future = (
+            executor.submit(
+                base.records, "Payroll Checks", filter_formula=check_filter,
+            )
+            if check_period_start else None
         )
         worker_records = workers_future.result()
         day_records = days_future.result()
         location_records = locations_future.result()
-        check_records = checks_future.result()
+        check_records = checks_future.result() if checks_future else []
 
     workers = {}
     for record in worker_records:
