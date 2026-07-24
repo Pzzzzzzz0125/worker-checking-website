@@ -74,14 +74,16 @@ class LarkBaseReadTests(unittest.TestCase):
         self.assertEqual(details["review_count"], 1)
         self.assertEqual(details["last_recorded_date"], "2026-07-01")
 
-    def test_summary_joins_days_and_allocations(self):
+    def test_summary_uses_compact_work_day_data(self):
         result = build_summary(FakeBase(), "2026-07-01", "2026-07-15")
         self.assertEqual(result["totals"]["hours"], 10)
+        self.assertEqual(result["totals"]["regular_hours"], 8)
+        self.assertEqual(result["totals"]["overtime_hours"], 2)
         self.assertEqual(result["totals"]["extra_pay"], 20)
         self.assertEqual(result["totals"]["active_workers"], 1)
-        self.assertEqual(result["records"][0]["locations"][0]["name"], "444 Pocatello")
-        self.assertEqual(result["records"][0]["cost_centers"][0]["id"], "CC-12")
-        self.assertEqual(result["daily"], [{"date": "2026-07-01", "hours": 10.0}])
+        self.assertEqual(result["totals"]["record_count"], 1)
+        self.assertNotIn("locations", result["records"][0])
+        self.assertNotIn("daily", result)
 
 
 if __name__ == "__main__":
