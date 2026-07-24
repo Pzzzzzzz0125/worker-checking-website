@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 from api._lark import LarkAPIError
+from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
     bool_value,
@@ -410,7 +411,7 @@ class handler(BaseHTTPRequestHandler):
             return
         query = parse_qs(urlparse(self.path).query)
         try:
-            base = LarkBase()
+            base = DataStore()
             worker_list, worker_map = workers(base)
             action = query_action(self)
             if action == "day":
@@ -455,7 +456,7 @@ class handler(BaseHTTPRequestHandler):
             return
         try:
             body = read_body(self)
-            base = LarkBase()
+            base = DataStore()
             worker_list, worker_map = workers(base)
             del worker_list
             action = query_action(self)

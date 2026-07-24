@@ -6,6 +6,7 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler
 
 from api._lark import LarkAPIError
+from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
     bool_value,
@@ -21,7 +22,7 @@ def build_bootstrap(base: LarkBase) -> dict:
     missing = base.missing_tables()
     if missing:
         raise LarkAPIError(
-            "Lark Base setup is incomplete. Missing: " + ", ".join(missing),
+            "Database setup is incomplete. Missing: " + ", ".join(missing),
             status=503,
         )
 
@@ -107,13 +108,13 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         try:
-            json_response(self, build_bootstrap(LarkBase()))
+            json_response(self, build_bootstrap(DataStore()))
         except LarkAPIError as error:
             json_response(
                 self,
                 {
                     "error": str(error),
-                    "code": "setup_required" if error.status == 503 else "lark_error",
+                    "code": "setup_required" if error.status == 503 else "storage_error",
                     "setup_required": error.status == 503,
                     "lark_code": error.code,
                 },

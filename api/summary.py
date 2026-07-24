@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
+from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
     date_range_filter,
@@ -99,6 +100,6 @@ class handler(BaseHTTPRequestHandler):
             return
         selected_worker = query.get("worker_id", [""])[0]
         try:
-            json_response(self, build_summary(LarkBase(), start, end, selected_worker))
+            json_response(self, build_summary(DataStore(), start, end, selected_worker))
         except LarkAPIError as error:
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)

@@ -5,6 +5,32 @@ for worker, work-day, location, cost-center, payroll-check, and audit records.
 The local Python server and SQLite database remain available only for local
 development and data migration.
 
+For the PostgreSQL performance comparison, the application can instead use AWS
+RDS by setting `DATA_BACKEND=postgres`. Lark OAuth remains enabled for login,
+but operational record reads and writes no longer call Lark Base.
+
+## PostgreSQL cutover
+
+1. Rotate any database password that has been shared in chat or source code.
+2. Confirm the RDS instance requires TLS and is reachable from Vercel without
+   exposing port 5432 broadly to the public internet.
+3. Add `DATABASE_URL` in Vercel using `sslmode=require`. Keep
+   `DATA_BACKEND=lark` initially.
+4. Deploy, sign in as a user listed in `LARK_ADMIN_OPEN_IDS`, and run the
+   administrator-only `POST /api/database/setup` importer with confirmation
+   `INITIALIZE POSTGRES`.
+5. Compare the returned Workers, Work Days, Location Entries, Cost Centers,
+   Payroll Checks, and Audit Log counts with Lark.
+6. Set `DATA_BACKEND=postgres`, redeploy, and verify `/api/health` reports
+   `postgres`.
+7. Keep Lark Base unchanged during the test so rollback requires only changing
+   `DATA_BACKEND` back to `lark`.
+
+Serverless functions can open several concurrent database connections. For a
+long-running production deployment, place RDS Proxy or another compatible
+connection pooler in front of RDS and use a least-privilege application
+database user instead of the PostgreSQL master user.
+
 ## Deployment sequence
 
 1. Import the private GitHub repository into a Vercel project.

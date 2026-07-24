@@ -18,6 +18,7 @@ def json_response(
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Data-Backend", os.environ.get("DATA_BACKEND", "lark"))
     for name, value in (headers or {}).items():
         handler.send_header(name, value)
     handler.send_header("Content-Length", str(len(encoded)))
