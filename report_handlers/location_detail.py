@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase
+from api._data_store import DataStore
 from api._reports import aggregate, california_overtime, load_report_data
 from api._shared import cookie_value, json_response, verify_payload
 
@@ -30,7 +30,7 @@ class handler(BaseHTTPRequestHandler):
             query_start = requested_start - timedelta(days=requested_start.weekday())
             query_end = requested_end + timedelta(days=6 - requested_end.weekday())
             data = load_report_data(
-                LarkBase(), query_start, query_end,
+                DataStore(), query_start, query_end,
                 location=requested,
             )
             names = sorted(

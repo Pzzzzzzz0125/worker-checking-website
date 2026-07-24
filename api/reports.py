@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 from api._shared import json_response
 from report_handlers.entries import handler as EntryHandler
 from report_handlers.ai import handler as AiHandler
+from report_handlers.database import handler as DatabaseHandler
 from report_handlers.location_detail import handler as LocationDetailHandler
 from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
@@ -27,6 +28,7 @@ class handler(BaseHTTPRequestHandler):
             "workers": WorkersHandler,
             "workers_access": WorkersHandler,
             "payroll_access": WorkersHandler,
+            "database_setup": DatabaseHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -39,6 +41,9 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.action() in {"ai_parse", "ai_apply"}:
             AiHandler.do_POST(self)
+            return
+        if self.action() == "database_setup":
+            DatabaseHandler.do_POST(self)
             return
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)

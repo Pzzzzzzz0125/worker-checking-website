@@ -20,13 +20,18 @@ Vercel static hosting and Python serverless APIs
        Lark OAuth login
              |
              v
-Lark Base workforce records + Lark Drive source workbooks
+PostgreSQL/RDS operational records
+             |
+      one-time import from
+             |
+Lark Base + Lark Drive source workbooks
 ```
 
 - The browser never receives the Lark app secret or tenant access token.
-- Vercel functions read and update Lark Base on behalf of the application.
-- Website changes are visible in Lark Base; Base changes appear after the
-  website refreshes.
+- The operational store is selected with `DATA_BACKEND`. `postgres` routes
+  website reads and writes to PostgreSQL; `lark` remains a reversible fallback.
+- Lark OAuth remains the website identity provider. Changing storage does not
+  change who is allowed to sign in.
 - Frequently repeated reads are cached briefly, while date-range reports use
   Lark-side filters instead of downloading the full historical dataset.
 - Local SQLite files remain development/legacy resources and are not the
@@ -231,6 +236,8 @@ function to remain within the Vercel Hobby function limit.
 Required production configuration includes:
 
 - `APP_URL`
+- `DATA_BACKEND`
+- `DATABASE_URL` when PostgreSQL is selected
 - `LARK_APP_ID`
 - `LARK_APP_SECRET`
 - `LARK_OAUTH_SCOPES`
@@ -250,6 +257,22 @@ confirms.
 Never commit real secrets, payroll workbooks, private Drive exports, or local
 SQLite databases. See [DEPLOYMENT.md](DEPLOYMENT.md) and
 [.env.example](.env.example) for configuration details.
+
+## PostgreSQL/RDS test migration
+
+Keep `DATA_BACKEND=lark` for the first deployment containing the PostgreSQL
+adapter. Add a TLS-enabled `DATABASE_URL`, redeploy, sign in as a configured
+Lark administrator, and call `POST /api/database/setup` with:
+
+```json
+{"confirm":"INITIALIZE POSTGRES","copy_from_lark":true}
+```
+
+The operation creates the PostgreSQL schema and upserts all six operational
+tables from Lark Base. Verify the returned counts, then change
+`DATA_BACKEND=postgres` and redeploy. After that switch, entries, payroll checks,
+AI-confirmed rows, and worker updates write only to PostgreSQL. Lark Base remains
+unchanged and can be retained as a rollback source during the comparison.
 
 ## Primary Lark Base tables
 

@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
+from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
     bool_value,
@@ -209,7 +210,7 @@ class handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            workers = list_workers(LarkBase())
+            workers = list_workers(DataStore())
             json_response(
                 self,
                 {
@@ -299,7 +300,7 @@ class handler(BaseHTTPRequestHandler):
                 return
             json_response(
                 self,
-                {"saved": True, "worker": update_worker(LarkBase(), body)},
+                {"saved": True, "worker": update_worker(DataStore(), body)},
             )
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             json_response(self, {"error": f"Invalid worker profile: {error}"}, 400)

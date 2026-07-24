@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler
 from zoneinfo import ZoneInfo
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase
+from api._data_store import DataStore
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -31,7 +31,7 @@ class handler(BaseHTTPRequestHandler):
             checked = bool(body.get("checked"))
             key = f"{worker_id}|{start.isoformat()}"
             now = int(datetime.now(tz=ZoneInfo("America/Los_Angeles")).timestamp() * 1000)
-            result = LarkBase().set_by_key(
+            result = DataStore().set_by_key(
                 "Payroll Checks",
                 "Payroll Check Key",
                 key,

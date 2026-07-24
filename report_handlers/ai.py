@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from api._lark import LarkAPIError
+from api._data_store import DataStore
 from api._lark_base import LarkBase, bool_value, field, text_value
 from api._shared import json_response
 from gemini_parser import extract_work_records
@@ -310,7 +311,7 @@ class handler(BaseHTTPRequestHandler):
                 if not 2020 <= selected_year <= 2100:
                     raise ValueError("Choose a valid year.")
                 extracted = extract_work_records(source_text, selected_year, Path("/tmp"))
-                base = LarkBase()
+                base = DataStore()
                 json_response(
                     self,
                     {
@@ -330,7 +331,7 @@ class handler(BaseHTTPRequestHandler):
             if action_name == "ai_apply":
                 json_response(
                     self,
-                    apply_records(LarkBase(), body.get("records") or []),
+                    apply_records(DataStore(), body.get("records") or []),
                 )
                 return
             json_response(self, {"error": "Unknown AI route."}, 404)
