@@ -43,11 +43,15 @@ export type Summary = {
   range: { from: string; to: string }
   totals: {
     hours: number
+    regular_hours: number
+    overtime_hours: number
     active_workers: number
     worked_days: number
     off_days: number
     extra_pay: number
+    average_hours: number
+    last_worked_date: string
+    record_count: number
   }
-  records: (WorkRecord & { locations: WorkLocation[] | string })[]
-  daily: { date: string; hours: number }[]
+  records: Pick<WorkRecord, "id" | "worker_id" | "worker_name" | "work_date" | "status" | "total_hours" | "overtime_hours" | "extra_pay">[]
 }

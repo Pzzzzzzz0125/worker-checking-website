@@ -10,6 +10,11 @@ export class ApiError extends Error {
 // Every request announces its lifecycle so the interface can show a consistent
 // progress indicator, including requests initiated from tables and checkboxes.
 let activeRequests = 0
+let mutationVersion = 0
+export function getApiMutationVersion() {
+  return mutationVersion
+}
+
 function notifyRequestState() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("speed-api-loading", { detail: activeRequests }))
@@ -31,6 +36,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
         : `Request failed (${response.status})`
       throw new ApiError(message, response.status)
     }
+    const method = String(options.method || "GET").toUpperCase()
+    if (method !== "GET" && method !== "HEAD") mutationVersion += 1
     return body as T
   } finally {
     activeRequests = Math.max(0, activeRequests - 1)

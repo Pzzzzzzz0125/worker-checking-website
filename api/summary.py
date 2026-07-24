@@ -1,57 +1,43 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase, date_range_filter, date_value, field, formula_string, number_value, text_value
+from api._lark_base import (
+    LarkBase,
+    date_range_filter,
+    date_value,
+    field,
+    formula_string,
+    number_value,
+    text_value,
+)
 from api._shared import cookie_value, json_response, verify_payload
 
 
 def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "") -> dict:
-    # Resolve table metadata once, then overlap the three independent Lark
-    # record requests. This changes latency from their sum to roughly the
-    # slowest individual request.
-    if hasattr(base, "table_ids"):
-        base.table_ids()
     filters = [date_range_filter("Work Date", start, end)]
     if selected_worker:
         filters.append(f"CurrentValue.[Worker Key]={formula_string(selected_worker)}")
     record_filter = filters[0] if len(filters) == 1 else f"AND({','.join(filters)})"
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        workers_future = executor.submit(base.records, "Workers")
-        allocations_future = executor.submit(
-            base.records, "Location Entries", filter_formula=record_filter,
-        )
-        days_future = executor.submit(base.records, "Work Days", filter_formula=record_filter)
-        worker_records = workers_future.result()
-        allocation_records = allocations_future.result()
-        day_records = days_future.result()
-
-    workers = {
-        text_value(field(record, "Worker Key")): text_value(field(record, "Name"))
-        for record in worker_records
-        if text_value(field(record, "Worker Key"))
-    }
-    allocations: dict[str, list[dict]] = defaultdict(list)
-    for record in allocation_records:
-        day_key = text_value(field(record, "Work Day Key"))
-        if not day_key:
-            continue
-        allocations[day_key].append(
-            {
-                "name": text_value(field(record, "Location")),
-                "hours": number_value(field(record, "Regular Hours")),
-                "start_time": text_value(field(record, "Start Time")),
-                "end_time": text_value(field(record, "End Time")),
-                "cost_center": {
-                    "id": text_value(field(record, "Cost Center ID")),
-                    "name": text_value(field(record, "Cost Center Name")),
-                },
-            }
-        )
+    # Overview intentionally reads only Work Days. Location and cost-center
+    # allocations belong on their dedicated detail pages and were the largest
+    # source of repeated Lark pagination here.
+    day_records = base.records(
+        "Work Days",
+        filter_formula=record_filter,
+        field_names=(
+            "Worker Key",
+            "Worker Name",
+            "Work Date",
+            "Status",
+            "Total Hours",
+            "Overtime Hours",
+            "Extra Pay",
+        ),
+        cache_seconds=120,
+    )
 
     records = []
     for record in day_records:
@@ -61,63 +47,41 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
             continue
         if selected_worker and worker_key != selected_worker:
             continue
-        day_key = text_value(field(record, "Work Day Key"))
-        day_allocations = allocations.get(day_key, [])
-        locations: dict[str, dict] = {}
-        centers: dict[str, dict] = {}
-        for item in day_allocations:
-            location_name = item["name"]
-            center = item["cost_center"]
-            if location_name:
-                location = locations.setdefault(
-                    location_name,
-                    {"name": location_name, "hours": 0.0, "cost_centers": []},
-                )
-                location["start_time"] = item["start_time"]
-                location["end_time"] = item["end_time"]
-                location["hours"] += item["hours"]
-                if center["id"] and center["id"] not in {x["id"] for x in location["cost_centers"]}:
-                    location["cost_centers"].append(center)
-            if center["id"]:
-                centers[center["id"]] = center
         status = text_value(field(record, "Status")) or "worked"
         records.append(
             {
                 "id": record.get("record_id", ""),
                 "worker_id": int(worker_key) if worker_key.isdigit() else 0,
-                "worker_name": workers.get(worker_key, "") or text_value(field(record, "Worker Name")),
+                "worker_name": text_value(field(record, "Worker Name")),
                 "work_date": work_date,
                 "status": status,
                 "total_hours": number_value(field(record, "Total Hours")),
                 "overtime_hours": number_value(field(record, "Overtime Hours")),
                 "extra_pay": number_value(field(record, "Extra Pay")),
-                "start_time": text_value(field(record, "Start Time")),
-                "end_time": text_value(field(record, "End Time")),
-                "notes": text_value(field(record, "Notes")),
-                "locations": list(locations.values()),
-                "cost_centers": list(centers.values()),
             }
         )
     records.sort(key=lambda item: (item["work_date"], item["worker_name"].casefold()), reverse=True)
 
     worked = [item for item in records if item["status"] == "worked"]
-    daily: dict[str, float] = defaultdict(float)
-    for item in worked:
-        daily[item["work_date"]] += item["total_hours"]
+    total_hours = round(sum(item["total_hours"] for item in worked), 2)
+    overtime_hours = round(sum(item["overtime_hours"] for item in worked), 2)
     return {
         "range": {"from": start, "to": end},
         "totals": {
-            "hours": round(sum(item["total_hours"] for item in worked), 2),
+            "hours": total_hours,
+            "regular_hours": round(max(0, total_hours - overtime_hours), 2),
+            "overtime_hours": overtime_hours,
             "active_workers": len({item["worker_id"] for item in worked}),
             "worked_days": len(worked),
             "off_days": len([item for item in records if item["status"] == "off"]),
             "extra_pay": round(sum(item["extra_pay"] for item in worked), 2),
+            "average_hours": round(total_hours / len(worked), 2) if worked else 0,
+            "last_worked_date": worked[0]["work_date"] if worked else "",
+            "record_count": len(records),
         },
-        "records": records,
-        "daily": [
-            {"date": work_date, "hours": round(hours, 2)}
-            for work_date, hours in sorted(daily.items())
-        ],
+        # A compact activity list keeps the page useful without returning and
+        # rendering an entire pay-history table.
+        "records": records[:50],
     }
 
 
