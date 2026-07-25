@@ -14,6 +14,7 @@ class FakeDatabase:
         self.failed = []
         self.saved_mappings = {}
         self.deleted_mappings = []
+        self.settings = {}
 
     def claim_sync_events(self, _limit):
         return self.events
@@ -23,6 +24,12 @@ class FakeDatabase:
 
     def work_log_records(self, _keys):
         return self.work_rows
+
+    def get_setting(self, key):
+        return self.settings.get(key)
+
+    def set_setting(self, key, value):
+        self.settings[key] = value
 
     def set_mirror_record_ids(self, _table_name, mappings):
         self.saved_mappings.update(mappings)

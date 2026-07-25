@@ -25,7 +25,7 @@ Managed PostgreSQL operational records
              |
       durable async mirror
              |
-Lark Base Work Log + reference tables
+Lark Base Work Log + connected Lark Spreadsheet
 ```
 
 - The browser never receives the Lark app secret or tenant access token.
@@ -321,3 +321,23 @@ ot 2h, ex $20
   the first reconciliation; they provide a rollback/reference copy.
 - Website edits rebuild the complete Work Log row from PostgreSQL. Direct edits
   to Work Log are not imported back into the website.
+
+## Connected Lark Spreadsheet
+
+An administrator can create one Drive spreadsheet named **Speed Construction
+Work Schedule** through `POST /api/lark/workbook`. It mirrors the original
+payroll workbook layout:
+
+- one worksheet per half-month payroll period;
+- dates across row 1 and worker names down column A;
+- one worker/date cell containing locations, location time ranges,
+  regular/overtime allocation, cost-center IDs and names, totals, extra pay,
+  notes, source, and confidence;
+- frozen date and worker headers;
+- navy headers and bordered work cells.
+
+The workbook token and stable worker-row assignments are stored in PostgreSQL.
+Future entry edits update only the corresponding cells through the existing
+asynchronous Lark sync queue, so website reads and saves do not wait for Sheets.
+The spreadsheet is a read-only reporting view: direct Sheet edits do not update
+PostgreSQL.

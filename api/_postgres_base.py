@@ -197,6 +197,15 @@ class PostgresBase:
                         )
                         """
                     )
+                    cursor.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS workforce_settings (
+                            setting_key TEXT PRIMARY KEY,
+                            value JSONB NOT NULL,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
                     cursor.executemany(
                         """
                         INSERT INTO workforce_tables (table_name)
@@ -615,6 +624,52 @@ class PostgresBase:
         except Exception as error:
             raise LarkAPIError(
                 f"Could not build Work Log records: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def get_setting(self, setting_key: str) -> Any:
+        """Read optional integration state without requiring a schema migration first."""
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT to_regclass('public.workforce_settings')")
+                    if not cursor.fetchone()[0]:
+                        return None
+                    cursor.execute(
+                        """
+                        SELECT value
+                        FROM workforce_settings
+                        WHERE setting_key = %s
+                        """,
+                        (setting_key,),
+                    )
+                    row = cursor.fetchone()
+            return _decode_fields(row[0]) if row else None
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not read integration settings: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def set_setting(self, setting_key: str, value: dict) -> None:
+        try:
+            _, Jsonb = _driver()
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO workforce_settings
+                            (setting_key, value, updated_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (setting_key) DO UPDATE SET
+                            value = EXCLUDED.value,
+                            updated_at = NOW()
+                        """,
+                        (setting_key, Jsonb(value)),
+                    )
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not save integration settings: {type(error).__name__}.",
                 status=503,
             ) from error
 

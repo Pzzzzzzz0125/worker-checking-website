@@ -3,8 +3,8 @@
 Production uses one responsive Vercel website. Managed PostgreSQL (currently
 AWS RDS or Neon) is the operational source of truth for worker, work-day,
 location, cost-center, payroll-check, and audit records. Lark remains the OAuth
-identity provider and provides one human-readable mirrored **Work Log** plus
-small reference/control tables.
+identity provider and provides one human-readable mirrored **Work Log**, one
+Excel-style Drive spreadsheet, and small reference/control tables.
 
 Set `DATA_BACKEND=postgres` after the initial Lark-to-PostgreSQL copy is
 verified. Lark OAuth remains enabled for login. Normal operational reads do not
@@ -128,6 +128,28 @@ The browser never calls Lark directly. Vercel functions obtain a tenant token
 and perform mirrored Base operations server-side. Website changes become
 visible in Lark after the outbox sync completes. Direct Lark edits are not
 returned to PostgreSQL.
+
+## Connected Drive spreadsheet
+
+Enable and publish the tenant-token `sheets:spreadsheet` permission before
+initialization. Keep `LARK_DRIVE_FOLDER_TOKEN` configured. After deploying,
+send this authenticated administrator request once:
+
+```json
+POST /api/lark/workbook
+{"action":"initialize"}
+```
+
+The endpoint creates **Speed Construction Work Schedule** in the configured
+Drive folder, adds one worksheet per half-month period, writes the complete
+historical worker/date matrix, and stores its token and stable worker rows in
+PostgreSQL. It is idempotent; `{"action":"refresh"}` rebuilds the matrix in the
+same workbook. `GET /api/lark/workbook` returns status and the workbook URL.
+
+Once configured, work-day and worker-name outbox events update both Work Log
+and the spreadsheet. Spreadsheet writes remain asynchronous and do not add
+Lark latency to normal page reads or save responses. Treat the sheet as
+read-only; direct cell edits are not imported into PostgreSQL.
 
 ## Migration and validation
 

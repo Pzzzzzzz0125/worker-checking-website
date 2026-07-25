@@ -5,6 +5,11 @@ import re
 
 from api._lark import LarkAPIError
 from api._lark_base import LarkBase
+from api._lark_sheet import (
+    WORKBOOK_SETTING,
+    configured_workbook,
+    worker_profiles,
+)
 from api._postgres_base import KEY_FIELDS, PostgresBase, lark_mirror_enabled
 from api._work_log import WORK_LOG_TABLE, work_log_row
 
@@ -148,6 +153,19 @@ def _sync_work_log(
             },
         )
 
+    configured = configured_workbook(database)
+    if configured:
+        workbook, config = configured
+        workers = worker_profiles(database.records("Workers", cache_seconds=0))
+        result = workbook.sync_work_rows(
+            workers,
+            list(desired_rows.values()),
+            missing_day_keys,
+            config,
+        )
+        config["worker_rows"] = result["worker_rows"]
+        database.set_setting(WORKBOOK_SETTING, config)
+
 
 def synchronize_lark(limit: int = 200) -> dict:
     database = PostgresBase()
@@ -197,6 +215,16 @@ def synchronize_lark(limit: int = 200) -> dict:
                 table_name,
                 desired,
             )
+            if table_name == "Workers":
+                configured = configured_workbook(database)
+                if configured:
+                    workbook, config = configured
+                    workers = worker_profiles(
+                        database.records("Workers", cache_seconds=0)
+                    )
+                    result = workbook.sync_workers(workers, config)
+                    config["worker_rows"] = result["worker_rows"]
+                    database.set_setting(WORKBOOK_SETTING, config)
             database.complete_sync_events(event_ids)
             processed += len(event_ids)
         except Exception as error:

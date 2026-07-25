@@ -12,6 +12,7 @@ from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
 from report_handlers.payroll_worker_detail import handler as PayrollWorkerDetailHandler
 from report_handlers.sync import handler as SyncHandler
+from report_handlers.workbook import handler as WorkbookHandler
 from report_handlers.workers import handler as WorkersHandler, require_payroll_access
 
 
@@ -31,6 +32,7 @@ class handler(BaseHTTPRequestHandler):
             "payroll_access": WorkersHandler,
             "database_setup": DatabaseHandler,
             "lark_sync": SyncHandler,
+            "lark_workbook": WorkbookHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -49,6 +51,9 @@ class handler(BaseHTTPRequestHandler):
             return
         if self.action() == "lark_sync":
             SyncHandler.do_POST(self)
+            return
+        if self.action() == "lark_workbook":
+            WorkbookHandler.do_POST(self)
             return
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)

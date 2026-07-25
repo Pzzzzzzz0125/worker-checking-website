@@ -24,6 +24,10 @@
       "destination": "/api/reports?action=lark_sync"
     },
     {
+      "source": "/api/lark/workbook",
+      "destination": "/api/reports?action=lark_workbook"
+    },
+    {
       "source": "/api/payroll/access",
       "destination": "/api/reports?action=payroll_access"
     },
