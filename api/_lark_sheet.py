@@ -21,6 +21,10 @@ from api._work_log import compact_number
 
 WORKBOOK_SETTING = "lark_work_schedule"
 WORKBOOK_TITLE = "Speed Construction Work Schedule"
+WORKER_COLUMN_WIDTH = 190
+WORK_CELL_WIDTH = 300
+HEADER_ROW_HEIGHT = 40
+WORK_CELL_HEIGHT = 120
 
 
 @dataclass(frozen=True)
@@ -337,6 +341,56 @@ class LarkWorkbook:
             },
         )
 
+    def resize_dimension(
+        self,
+        sheet_id: str,
+        dimension: str,
+        start_index: int,
+        end_index: int,
+        fixed_size: int,
+    ) -> None:
+        if end_index <= start_index:
+            return
+        lark_api(
+            "PUT",
+            (
+                "/sheets/v2/spreadsheets/"
+                f"{quote(self.spreadsheet_token, safe='')}/dimension_range"
+            ),
+            token=self.token,
+            body={
+                "dimension": {
+                    "sheetId": sheet_id,
+                    "majorDimension": dimension,
+                    "startIndex": start_index,
+                    "endIndex": end_index,
+                },
+                "dimensionProperties": {
+                    "visible": True,
+                    "fixedSize": fixed_size,
+                },
+            },
+        )
+
+    def apply_readable_layout(
+        self,
+        sheet_id: str,
+        date_columns: int,
+        worker_rows: int,
+    ) -> None:
+        self.resize_dimension(
+            sheet_id, "COLUMNS", 0, 1, WORKER_COLUMN_WIDTH,
+        )
+        self.resize_dimension(
+            sheet_id, "COLUMNS", 1, date_columns + 1, WORK_CELL_WIDTH,
+        )
+        self.resize_dimension(
+            sheet_id, "ROWS", 0, 1, HEADER_ROW_HEIGHT,
+        )
+        self.resize_dimension(
+            sheet_id, "ROWS", 1, max(worker_rows, 2), WORK_CELL_HEIGHT,
+        )
+
     def initialize(
         self,
         workers: list[dict],
@@ -418,6 +472,11 @@ class LarkWorkbook:
                     "borderColor": "#E2E8F0",
                     "clean": False,
                 },
+            )
+            self.apply_readable_layout(
+                sheet_id,
+                len(dates_in_period),
+                max_row,
             )
 
         config["worker_rows"] = worker_rows
