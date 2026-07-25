@@ -20,16 +20,19 @@ Vercel static hosting and Python serverless APIs
        Lark OAuth login
              |
              v
-PostgreSQL/RDS operational records
+Managed PostgreSQL operational records
              |
-      one-time import from
+      durable async mirror
              |
-Lark Base + Lark Drive source workbooks
+Lark Base visible tables
 ```
 
 - The browser never receives the Lark app secret or tenant access token.
 - The operational store is selected with `DATA_BACKEND`. `postgres` routes
-  website reads and writes to PostgreSQL; `lark` remains a reversible fallback.
+  website reads and writes to AWS RDS, Neon, or another PostgreSQL provider.
+- When `LARK_MIRROR_ENABLED=true`, PostgreSQL writes create durable sync tasks.
+  The browser starts a separate batch sync after saves and on application
+  startup, so normal page reads and save responses do not wait for Lark.
 - Lark OAuth remains the website identity provider. Changing storage does not
   change who is allowed to sign in.
 - Frequently repeated reads are cached briefly, while date-range reports use
@@ -205,21 +208,12 @@ The current frontend requires Node.js for development:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run build
 ```
 
-The compiled production assets are written to `static/app-ui` and committed so
-Vercel can serve the same verified build.
-
-The repository also contains the earlier local Python/SQLite application:
-
-```bash
-python3 server.py
-```
-
-That server is useful for legacy/local inspection but does not reproduce the
-production Lark-backed storage path.
+The compiled assets are written to `static/app-ui`. They are generated during
+the Vercel build and are intentionally excluded from Git.
 
 Run the Python test suite with:
 
@@ -238,6 +232,7 @@ Required production configuration includes:
 - `APP_URL`
 - `DATA_BACKEND`
 - `DATABASE_URL` when PostgreSQL is selected
+- `LARK_MIRROR_ENABLED` after the mirror schema has been initialized
 - `LARK_APP_ID`
 - `LARK_APP_SECRET`
 - `LARK_OAUTH_SCOPES`
@@ -258,11 +253,12 @@ Never commit real secrets, payroll workbooks, private Drive exports, or local
 SQLite databases. See [DEPLOYMENT.md](DEPLOYMENT.md) and
 [.env.example](.env.example) for configuration details.
 
-## PostgreSQL/RDS test migration
+## PostgreSQL migration and Lark mirror
 
-Keep `DATA_BACKEND=lark` for the first deployment containing the PostgreSQL
-adapter. Add a TLS-enabled `DATABASE_URL`, redeploy, sign in as a configured
-Lark administrator, and call `POST /api/database/setup` with:
+Connect AWS RDS, Neon, or another managed PostgreSQL service and configure its
+TLS connection string as `DATABASE_URL`. Keep
+`DATA_BACKEND=lark` until the initial copy is complete. Redeploy, sign in as a
+configured Lark administrator, and call `POST /api/database/setup` with:
 
 ```json
 {"confirm":"INITIALIZE POSTGRES","copy_from_lark":true}
@@ -271,8 +267,26 @@ Lark administrator, and call `POST /api/database/setup` with:
 The operation creates the PostgreSQL schema and upserts all six operational
 tables from Lark Base. Verify the returned counts, then change
 `DATA_BACKEND=postgres` and redeploy. After that switch, entries, payroll checks,
-AI-confirmed rows, and worker updates write only to PostgreSQL. Lark Base remains
-unchanged and can be retained as a rollback source during the comparison.
+AI-confirmed rows, and worker updates use PostgreSQL.
+
+Before enabling the visible Lark mirror on an existing PostgreSQL database,
+upgrade the schema without re-importing stale Lark data:
+
+```json
+{"confirm":"INITIALIZE POSTGRES","copy_from_lark":false}
+```
+
+Then set `LARK_MIRROR_ENABLED=true` and redeploy. Future website writes are
+queued transactionally in PostgreSQL and mirrored to Lark in a separate request.
+To reconcile all existing PostgreSQL records once, an administrator can call
+`POST /api/sync/lark` with:
+
+```json
+{"backfill":true,"limit":500}
+```
+
+The header reports `AWS and Lark synced`, `Syncing Lark`, or `Lark sync
+pending`. Lark is a visible mirror; PostgreSQL remains the source of truth.
 
 ## Primary Lark Base tables
 

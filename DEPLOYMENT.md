@@ -1,22 +1,21 @@
-# Vercel and Lark deployment
+# Vercel, PostgreSQL, and Lark deployment
 
-Production uses one responsive Vercel website. Lark Base is the source of truth
-for worker, work-day, location, cost-center, payroll-check, and audit records.
-The local Python server and SQLite database remain available only for local
-development and data migration.
+Production uses one responsive Vercel website. Managed PostgreSQL (currently
+AWS RDS or Neon) is the operational source of truth for worker, work-day,
+location, cost-center, payroll-check, and audit records. Lark remains the OAuth
+identity provider and provides human-readable mirrored Base tables.
 
-For the PostgreSQL performance comparison, the application can instead use AWS
-RDS by setting `DATA_BACKEND=postgres`. Lark OAuth remains enabled for login,
-but operational record reads and writes no longer call Lark Base.
+Set `DATA_BACKEND=postgres` after the initial Lark-to-PostgreSQL copy is
+verified. Lark OAuth remains enabled for login. Normal operational reads do not
+call Lark Base.
 
 ## PostgreSQL cutover
 
-1. Rotate any database password that has been shared in chat or source code.
-2. Confirm the RDS instance requires TLS and is reachable from Vercel without
-   exposing port 5432 broadly to the public internet.
-3. Add `DATABASE_URL` in Vercel using `sslmode=require`. Keep
-   `DATA_BACKEND=lark` initially.
-4. Deploy, sign in as a user listed in `LARK_ADMIN_OPEN_IDS`, and run the
+1. Configure a TLS-enabled `DATABASE_URL` for AWS RDS, Neon, or another managed
+   PostgreSQL service.
+2. Keep `LARK_MIRROR_ENABLED=false` during initial schema setup.
+3. Keep `DATA_BACKEND=lark` initially and redeploy.
+4. Sign in as a user listed in `LARK_ADMIN_OPEN_IDS`, and run the
    administrator-only `POST /api/database/setup` importer with confirmation
    `INITIALIZE POSTGRES`.
 5. Compare the returned Workers, Work Days, Location Entries, Cost Centers,
@@ -26,10 +25,37 @@ but operational record reads and writes no longer call Lark Base.
 7. Keep Lark Base unchanged during the test so rollback requires only changing
    `DATA_BACKEND` back to `lark`.
 
-Serverless functions can open several concurrent database connections. For a
-long-running production deployment, place RDS Proxy or another compatible
-connection pooler in front of RDS and use a least-privilege application
-database user instead of the PostgreSQL master user.
+The application reads the standard PostgreSQL `DATABASE_URL`; no
+provider-specific source-code adapter is required. Use a pooler when the
+selected provider supports one.
+
+## Visible Lark mirror
+
+The mirror is intentionally asynchronous:
+
+```text
+Website save -> PostgreSQL transaction + outbox -> response to user
+                                             |
+                                             v
+                                separate Lark batch sync
+```
+
+For an existing PostgreSQL database:
+
+1. Deploy this schema with `LARK_MIRROR_ENABLED=false`.
+2. Call `POST /api/database/setup` with confirmation `INITIALIZE POSTGRES` and
+   `copy_from_lark:false`. This adds the outbox and Lark record-ID mapping
+   tables without replacing PostgreSQL records.
+3. Set `LARK_MIRROR_ENABLED=true` and redeploy.
+4. Optionally queue one complete reconciliation with authenticated
+   administrator request `{"backfill":true,"limit":500}` to
+   `POST /api/sync/lark`.
+
+Every PostgreSQL upsert or deletion is committed with its outbox event. The
+frontend starts sync in a separate request after writes and when the app opens.
+Failed Lark calls stay pending and retry later. The app header exposes the
+current mirror state. Lark Base should be treated as a visible, read-only
+operational mirror; direct Lark edits do not update PostgreSQL.
 
 ## Deployment sequence
 
@@ -44,8 +70,8 @@ database user instead of the PostgreSQL master user.
 6. Redeploy the production branch.
 
 The first deployment intentionally displays a cloud-setup screen until the
-Lark Base adapter and environment variables are connected. The health endpoint
-is `/api/health`.
+selected data adapter and environment variables are connected. The health
+endpoint is `/api/health`.
 
 ## Authentication
 
@@ -92,9 +118,9 @@ Use stable field names and do not delete or rename fields after integration.
 - **Audit Log:** actor, action, entity key, old/new values, and timestamp.
 
 The browser never calls Lark directly. Vercel functions obtain a tenant token
-and perform Base operations server-side. Changes made through the website are
-therefore visible in the Base, and edits made in the Base are returned to the
-website on refresh. A Base-record-change webhook can invalidate cached data.
+and perform mirrored Base operations server-side. Website changes become
+visible in Lark after the outbox sync completes. Direct Lark edits are not
+returned to PostgreSQL.
 
 ## Migration and validation
 

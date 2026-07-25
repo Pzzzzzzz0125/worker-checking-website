@@ -23,6 +23,14 @@ KEY_FIELDS = {
 _CACHE: dict[tuple[str, str, tuple[str, ...]], tuple[float, list[dict]]] = {}
 
 
+def lark_mirror_enabled() -> bool:
+    return (
+        os.environ.get("DATA_BACKEND", "lark").strip().casefold() == "postgres"
+        and os.environ.get("LARK_MIRROR_ENABLED", "").strip().casefold()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 def _driver():
     try:
         import psycopg
@@ -136,6 +144,49 @@ class PostgresBase:
                         ON workforce_records (table_name, updated_at DESC)
                         """
                     )
+                    cursor.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS workforce_sync_outbox (
+                            id BIGSERIAL PRIMARY KEY,
+                            table_name TEXT NOT NULL
+                                REFERENCES workforce_tables(table_name)
+                                ON DELETE CASCADE,
+                            key_field TEXT NOT NULL,
+                            key_value TEXT NOT NULL,
+                            operation TEXT NOT NULL
+                                CHECK (operation IN ('upsert', 'delete')),
+                            fields JSONB,
+                            status TEXT NOT NULL DEFAULT 'pending'
+                                CHECK (status IN ('pending', 'processing', 'synced')),
+                            attempts INTEGER NOT NULL DEFAULT 0,
+                            available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            locked_until TIMESTAMPTZ,
+                            last_error TEXT,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            synced_at TIMESTAMPTZ
+                        )
+                        """
+                    )
+                    cursor.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS workforce_sync_outbox_pending
+                        ON workforce_sync_outbox (status, available_at, id)
+                        """
+                    )
+                    cursor.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS workforce_lark_mirror_keys (
+                            table_name TEXT NOT NULL
+                                REFERENCES workforce_tables(table_name)
+                                ON DELETE CASCADE,
+                            key_value TEXT NOT NULL,
+                            lark_record_id TEXT NOT NULL,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            PRIMARY KEY (table_name, key_value),
+                            UNIQUE (table_name, lark_record_id)
+                        )
+                        """
+                    )
                     cursor.executemany(
                         """
                         INSERT INTO workforce_tables (table_name)
@@ -143,6 +194,16 @@ class PostgresBase:
                         ON CONFLICT (table_name) DO NOTHING
                         """,
                         [(name,) for name in sorted(REQUIRED_TABLES)],
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO workforce_lark_mirror_keys
+                            (table_name, key_value, lark_record_id)
+                        SELECT table_name, key_value, record_id
+                        FROM workforce_records
+                        WHERE record_id LIKE 'rec%'
+                        ON CONFLICT (table_name, key_value) DO NOTHING
+                        """
                     )
         except LarkAPIError:
             raise
@@ -224,6 +285,41 @@ class PostgresBase:
             if key[0] == table_name:
                 _CACHE.pop(key, None)
 
+    @staticmethod
+    def _enqueue_upserts(cursor, table_name: str, key_field: str, rows: list[dict]) -> None:
+        if not lark_mirror_enabled() or not rows:
+            return
+        _, Jsonb = _driver()
+        cursor.executemany(
+            """
+            INSERT INTO workforce_sync_outbox
+                (table_name, key_field, key_value, operation, fields)
+            VALUES (%s, %s, %s, 'upsert', %s)
+            """,
+            [
+                (
+                    table_name,
+                    key_field,
+                    text_value(row.get(key_field)),
+                    Jsonb(row),
+                )
+                for row in rows
+            ],
+        )
+
+    @staticmethod
+    def _enqueue_deletes(cursor, table_name: str, rows: list[tuple[str, str]]) -> None:
+        if not lark_mirror_enabled() or not rows:
+            return
+        cursor.executemany(
+            """
+            INSERT INTO workforce_sync_outbox
+                (table_name, key_field, key_value, operation)
+            VALUES (%s, %s, %s, 'delete')
+            """,
+            [(table_name, key_field, key_value) for key_field, key_value in rows],
+        )
+
     def import_records(self, table_name: str, records: list[dict]) -> int:
         key_field = KEY_FIELDS[table_name]
         _, Jsonb = _driver()
@@ -256,6 +352,26 @@ class PostgresBase:
                             updated_at = NOW()
                         """,
                         rows,
+                    )
+                    cursor.executemany(
+                        """
+                        INSERT INTO workforce_lark_mirror_keys
+                            (table_name, key_value, lark_record_id)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (table_name, key_value) DO UPDATE SET
+                            lark_record_id = EXCLUDED.lark_record_id,
+                            updated_at = NOW()
+                        """,
+                        [
+                            (
+                                table_name,
+                                text_value((record.get("fields") or {}).get(key_field)),
+                                str(record.get("record_id") or ""),
+                            )
+                            for record in records
+                            if text_value((record.get("fields") or {}).get(key_field))
+                            and str(record.get("record_id") or "")
+                        ],
                     )
         except LarkAPIError:
             raise
@@ -323,6 +439,7 @@ class PostgresBase:
                         """,
                         payload,
                     )
+                    self._enqueue_upserts(cursor, table_name, key_field, rows)
         except LarkAPIError:
             raise
         except Exception as error:
@@ -365,12 +482,25 @@ class PostgresBase:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """
+                        SELECT key_field, key_value
+                        FROM workforce_records
+                        WHERE table_name = %s AND record_id = ANY(%s)
+                        """,
+                        (table_name, record_ids),
+                    )
+                    deleted_keys = [
+                        (str(key_field), str(key_value))
+                        for key_field, key_value in cursor.fetchall()
+                    ]
+                    cursor.execute(
+                        """
                         DELETE FROM workforce_records
                         WHERE table_name = %s AND record_id = ANY(%s)
                         """,
                         (table_name, record_ids),
                     )
                     deleted = cursor.rowcount
+                    self._enqueue_deletes(cursor, table_name, deleted_keys)
         except LarkAPIError:
             raise
         except Exception as error:
@@ -380,3 +510,247 @@ class PostgresBase:
             ) from error
         self.invalidate_records(table_name)
         return int(deleted)
+
+    def enqueue_sync_snapshot(self) -> int:
+        """Queue the current PostgreSQL state for a one-time Lark reconciliation."""
+        if not lark_mirror_enabled():
+            raise LarkAPIError("Lark mirroring is not enabled.", status=409)
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO workforce_sync_outbox
+                            (table_name, key_field, key_value, operation, fields)
+                        SELECT table_name, key_field, key_value, 'upsert', fields
+                        FROM workforce_records
+                        """
+                    )
+                    queued = cursor.rowcount
+            return int(queued)
+        except LarkAPIError:
+            raise
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not queue the Lark snapshot: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def mirror_record_ids(self, table_name: str, key_values: list[str]) -> dict[str, str]:
+        key_values = [value for value in dict.fromkeys(key_values) if value]
+        if not key_values:
+            return {}
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT key_value, lark_record_id
+                        FROM workforce_lark_mirror_keys
+                        WHERE table_name = %s AND key_value = ANY(%s)
+                        """,
+                        (table_name, key_values),
+                    )
+                    return {
+                        str(key_value): str(record_id)
+                        for key_value, record_id in cursor.fetchall()
+                    }
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not read Lark record mappings: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def set_mirror_record_ids(self, table_name: str, mappings: dict[str, str]) -> None:
+        mappings = {
+            str(key): str(record_id)
+            for key, record_id in mappings.items()
+            if key and record_id
+        }
+        if not mappings:
+            return
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.executemany(
+                        """
+                        INSERT INTO workforce_lark_mirror_keys
+                            (table_name, key_value, lark_record_id)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (table_name, key_value) DO UPDATE SET
+                            lark_record_id = EXCLUDED.lark_record_id,
+                            updated_at = NOW()
+                        """,
+                        [
+                            (table_name, key, record_id)
+                            for key, record_id in mappings.items()
+                        ],
+                    )
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not save Lark record mappings: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def delete_mirror_keys(self, table_name: str, key_values: list[str]) -> None:
+        key_values = [value for value in dict.fromkeys(key_values) if value]
+        if not key_values:
+            return
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        DELETE FROM workforce_lark_mirror_keys
+                        WHERE table_name = %s AND key_value = ANY(%s)
+                        """,
+                        (table_name, key_values),
+                    )
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not delete Lark record mappings: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def claim_sync_events(self, limit: int = 200) -> list[dict]:
+        limit = max(1, min(int(limit), 500))
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE workforce_sync_outbox
+                        SET status = 'pending', locked_until = NULL
+                        WHERE status = 'processing' AND locked_until < NOW()
+                        """
+                    )
+                    cursor.execute(
+                        """
+                        SELECT id, table_name, key_field, key_value, operation, fields
+                        FROM workforce_sync_outbox
+                        WHERE status = 'pending' AND available_at <= NOW()
+                        ORDER BY id
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                        """,
+                        (limit,),
+                    )
+                    rows = cursor.fetchall()
+                    ids = [int(row[0]) for row in rows]
+                    if ids:
+                        cursor.execute(
+                            """
+                            UPDATE workforce_sync_outbox
+                            SET status = 'processing',
+                                attempts = attempts + 1,
+                                locked_until = NOW() + INTERVAL '5 minutes'
+                            WHERE id = ANY(%s)
+                            """,
+                            (ids,),
+                        )
+            return [
+                {
+                    "id": int(row[0]),
+                    "table_name": str(row[1]),
+                    "key_field": str(row[2]),
+                    "key_value": str(row[3]),
+                    "operation": str(row[4]),
+                    "fields": _decode_fields(row[5]),
+                }
+                for row in rows
+            ]
+        except LarkAPIError:
+            raise
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not read the Lark sync queue: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def complete_sync_events(self, event_ids: list[int]) -> None:
+        if not event_ids:
+            return
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE workforce_sync_outbox
+                        SET status = 'synced',
+                            synced_at = NOW(),
+                            locked_until = NULL,
+                            last_error = NULL
+                        WHERE id = ANY(%s)
+                        """,
+                        (event_ids,),
+                    )
+                    cursor.execute(
+                        """
+                        DELETE FROM workforce_sync_outbox
+                        WHERE status = 'synced'
+                          AND synced_at < NOW() - INTERVAL '7 days'
+                        """
+                    )
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not complete the Lark sync queue: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def fail_sync_events(self, event_ids: list[int], error: str) -> None:
+        if not event_ids:
+            return
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE workforce_sync_outbox
+                        SET status = 'pending',
+                            available_at = NOW() + INTERVAL '30 seconds',
+                            locked_until = NULL,
+                            last_error = %s
+                        WHERE id = ANY(%s)
+                        """,
+                        (error[:500], event_ids),
+                    )
+        except Exception as queue_error:
+            raise LarkAPIError(
+                f"Could not retry the Lark sync queue: {type(queue_error).__name__}.",
+                status=503,
+            ) from queue_error
+
+    def sync_status(self) -> dict:
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            COUNT(*) FILTER (
+                                WHERE status IN ('pending', 'processing')
+                            ) AS pending,
+                            COUNT(*) FILTER (
+                                WHERE status = 'pending' AND last_error IS NOT NULL
+                            ) AS retrying,
+                            COUNT(*) FILTER (
+                                WHERE status = 'synced'
+                                  AND synced_at >= NOW() - INTERVAL '24 hours'
+                            ) AS synced_last_24h,
+                            MAX(synced_at) AS last_synced_at
+                        FROM workforce_sync_outbox
+                        """
+                    )
+                    pending, retrying, recent, last_synced = cursor.fetchone()
+            return {
+                "enabled": lark_mirror_enabled(),
+                "pending": int(pending or 0),
+                "retrying": int(retrying or 0),
+                "synced_last_24h": int(recent or 0),
+                "last_synced_at": last_synced.isoformat() if last_synced else "",
+            }
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not inspect the Lark sync queue: {type(error).__name__}.",
+                status=503,
+            ) from error

@@ -20,6 +20,10 @@
       "destination": "/api/reports?action=database_setup"
     },
     {
+      "source": "/api/sync/lark",
+      "destination": "/api/reports?action=lark_sync"
+    },
+    {
       "source": "/api/payroll/access",
       "destination": "/api/reports?action=payroll_access"
     },
