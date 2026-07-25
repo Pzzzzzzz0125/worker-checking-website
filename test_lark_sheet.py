@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from api._lark_sheet import (
+    HEADER_ROW_HEIGHT,
     LarkWorkbook,
+    WORK_CELL_HEIGHT,
+    WORK_CELL_WIDTH,
+    WORKER_COLUMN_WIDTH,
     assign_worker_rows,
     column_name,
     pay_period,
@@ -88,6 +92,35 @@ class LarkSheetTests(unittest.TestCase):
             "Regular Hours": 8,
         })), captured)
         self.assertEqual(result["updated_cells"], len(captured))
+
+    @patch("api._lark_sheet.lark_api")
+    @patch("api._lark_sheet.tenant_access_token", return_value="token")
+    def test_readable_layout_widens_columns_and_rows(
+        self,
+        _token,
+        mocked_api,
+    ):
+        workbook = LarkWorkbook("spreadsheet")
+        workbook.apply_readable_layout("sheet-one", 15, 54)
+        dimensions = [call.kwargs["body"] for call in mocked_api.call_args_list]
+        self.assertEqual(
+            dimensions[0]["dimensionProperties"]["fixedSize"],
+            WORKER_COLUMN_WIDTH,
+        )
+        self.assertEqual(
+            dimensions[1]["dimensionProperties"]["fixedSize"],
+            WORK_CELL_WIDTH,
+        )
+        self.assertEqual(
+            dimensions[2]["dimensionProperties"]["fixedSize"],
+            HEADER_ROW_HEIGHT,
+        )
+        self.assertEqual(
+            dimensions[3]["dimensionProperties"]["fixedSize"],
+            WORK_CELL_HEIGHT,
+        )
+        self.assertEqual(dimensions[1]["dimension"]["endIndex"], 16)
+        self.assertEqual(dimensions[3]["dimension"]["endIndex"], 54)
 
 
 if __name__ == "__main__":
