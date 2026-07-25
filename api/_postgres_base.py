@@ -9,6 +9,7 @@ from typing import Any
 
 from api._lark import LarkAPIError
 from api._lark_base import REQUIRED_TABLES, date_value, field, text_value
+from api._work_log import WORK_LOG_TABLE
 
 
 KEY_FIELDS = {
@@ -146,6 +147,15 @@ class PostgresBase:
                     )
                     cursor.execute(
                         """
+                        CREATE INDEX IF NOT EXISTS workforce_records_work_day_key
+                        ON workforce_records (
+                            table_name,
+                            ((fields ->> 'Work Day Key'))
+                        )
+                        """
+                    )
+                    cursor.execute(
+                        """
                         CREATE TABLE IF NOT EXISTS workforce_sync_outbox (
                             id BIGSERIAL PRIMARY KEY,
                             table_name TEXT NOT NULL
@@ -193,7 +203,10 @@ class PostgresBase:
                         VALUES (%s)
                         ON CONFLICT (table_name) DO NOTHING
                         """,
-                        [(name,) for name in sorted(REQUIRED_TABLES)],
+                        [
+                            (name,)
+                            for name in sorted(REQUIRED_TABLES | {WORK_LOG_TABLE})
+                        ],
                     )
                     cursor.execute(
                         """
@@ -308,16 +321,24 @@ class PostgresBase:
         )
 
     @staticmethod
-    def _enqueue_deletes(cursor, table_name: str, rows: list[tuple[str, str]]) -> None:
+    def _enqueue_deletes(
+        cursor,
+        table_name: str,
+        rows: list[tuple[str, str, dict]],
+    ) -> None:
         if not lark_mirror_enabled() or not rows:
             return
+        _, Jsonb = _driver()
         cursor.executemany(
             """
             INSERT INTO workforce_sync_outbox
-                (table_name, key_field, key_value, operation)
-            VALUES (%s, %s, %s, 'delete')
+                (table_name, key_field, key_value, operation, fields)
+            VALUES (%s, %s, %s, 'delete', %s)
             """,
-            [(table_name, key_field, key_value) for key_field, key_value in rows],
+            [
+                (table_name, key_field, key_value, Jsonb(fields))
+                for key_field, key_value, fields in rows
+            ],
         )
 
     def import_records(self, table_name: str, records: list[dict]) -> int:
@@ -482,15 +503,15 @@ class PostgresBase:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT key_field, key_value
+                        SELECT key_field, key_value, fields
                         FROM workforce_records
                         WHERE table_name = %s AND record_id = ANY(%s)
                         """,
                         (table_name, record_ids),
                     )
                     deleted_keys = [
-                        (str(key_field), str(key_value))
-                        for key_field, key_value in cursor.fetchall()
+                        (str(key_field), str(key_value), _decode_fields(fields))
+                        for key_field, key_value, fields in cursor.fetchall()
                     ]
                     cursor.execute(
                         """
@@ -533,6 +554,67 @@ class PostgresBase:
         except Exception as error:
             raise LarkAPIError(
                 f"Could not queue the Lark snapshot: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def enqueue_work_log_snapshot(self) -> int:
+        """Queue one projection event for every current worker/day record."""
+        if not lark_mirror_enabled():
+            raise LarkAPIError("Lark mirroring is not enabled.", status=409)
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO workforce_sync_outbox
+                            (table_name, key_field, key_value, operation, fields)
+                        SELECT table_name, key_field, key_value, 'upsert', fields
+                        FROM workforce_records
+                        WHERE table_name = 'Work Days'
+                        """
+                    )
+                    queued = cursor.rowcount
+            return int(queued)
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not queue the Work Log snapshot: {type(error).__name__}.",
+                status=503,
+            ) from error
+
+    def work_log_records(self, day_keys: list[str]) -> tuple[list[dict], list[dict]]:
+        day_keys = [value for value in dict.fromkeys(day_keys) if value]
+        if not day_keys:
+            return [], []
+        try:
+            with _connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT fields
+                        FROM workforce_records
+                        WHERE table_name = 'Work Days'
+                          AND key_value = ANY(%s)
+                        """,
+                        (day_keys,),
+                    )
+                    days = [_decode_fields(row[0]) for row in cursor.fetchall()]
+                    cursor.execute(
+                        """
+                        SELECT fields
+                        FROM workforce_records
+                        WHERE table_name = 'Location Entries'
+                          AND (fields ->> 'Work Day Key') = ANY(%s)
+                        ORDER BY
+                            COALESCE((fields ->> 'Display Order')::numeric, 0),
+                            key_value
+                        """,
+                        (day_keys,),
+                    )
+                    locations = [_decode_fields(row[0]) for row in cursor.fetchall()]
+            return days, locations
+        except Exception as error:
+            raise LarkAPIError(
+                f"Could not build Work Log records: {type(error).__name__}.",
                 status=503,
             ) from error
 

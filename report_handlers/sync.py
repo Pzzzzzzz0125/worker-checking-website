@@ -59,7 +59,7 @@ class handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("The request body must be an object.")
             queued = 0
-            if body.get("backfill"):
+            if body.get("backfill") or body.get("work_log_backfill"):
                 if current.get("sub") not in admin_ids():
                     json_response(
                         self,
@@ -67,7 +67,12 @@ class handler(BaseHTTPRequestHandler):
                         403,
                     )
                     return
-                queued = PostgresBase().enqueue_sync_snapshot()
+                database = PostgresBase()
+                queued = (
+                    database.enqueue_work_log_snapshot()
+                    if body.get("work_log_backfill")
+                    else database.enqueue_sync_snapshot()
+                )
             result = synchronize_lark(int(body.get("limit") or 200))
             json_response(self, {**result, "snapshot_queued": queued})
         except (ValueError, TypeError, json.JSONDecodeError) as error:
