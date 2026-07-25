@@ -106,6 +106,14 @@ password-based access path, add `WORKER_ADMIN_PASSWORD` in Vercel and redeploy.
 The password stays server-side; successful unlocks use a user-bound HTTP-only
 cookie that expires after eight hours.
 
+The Import and Export pages use separate authorization:
+
+- Import requires a signed-in Lark user whose open ID is in
+  `LARK_ADMIN_OPEN_IDS`.
+- Export requires `EXPORT_PASSWORD`; even administrators must unlock it. The
+  export grant is a signed, user-bound, HTTP-only cookie that expires after
+  eight hours.
+
 ## Lark Base structure
 
 Use stable field names and do not delete or rename fields after integration.
@@ -133,7 +141,7 @@ returned to PostgreSQL.
 
 Enable and publish the tenant-token `sheets:spreadsheet` permission before
 initialization. Keep `LARK_DRIVE_FOLDER_TOKEN` configured. After deploying,
-send this authenticated administrator request once:
+open the password-protected Export page and initialize the workbook once:
 
 ```json
 POST /api/lark/workbook
@@ -150,6 +158,11 @@ Once configured, work-day and worker-name outbox events update both Work Log
 and the spreadsheet. Spreadsheet writes remain asynchronous and do not add
 Lark latency to normal page reads or save responses. Treat the sheet as
 read-only; direct cell edits are not imported into PostgreSQL.
+
+The Export page also contains inactive slots for invoice (`发票`), report
+(`汇报`), and additional form exports. Implement each as a separate generator
+after its approved sample/template is available; do not overload the connected
+schedule workbook with unrelated layouts.
 
 ## Migration and validation
 

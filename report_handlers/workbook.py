@@ -14,22 +14,11 @@ from api._lark_sheet import (
 from api._postgres_base import PostgresBase
 from api._shared import json_response
 from api._work_log import work_log_row
-from report_handlers.workers import admin_ids, session
+from report_handlers.data_access import require_export_access
 
 
 def _authorize(handler: BaseHTTPRequestHandler) -> dict | None:
-    current = session(handler)
-    if not current:
-        json_response(handler, {"error": "Sign in with Lark first."}, 401)
-        return None
-    if current.get("sub") not in admin_ids():
-        json_response(
-            handler,
-            {"error": "Workbook setup requires a configured Lark administrator."},
-            403,
-        )
-        return None
-    return current
+    return {"authorized": True} if require_export_access(handler) else None
 
 
 def _fields(records: list[dict]) -> list[dict]:

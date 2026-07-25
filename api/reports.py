@@ -7,6 +7,7 @@ from api._shared import json_response
 from report_handlers.entries import handler as EntryHandler
 from report_handlers.ai import handler as AiHandler
 from report_handlers.database import handler as DatabaseHandler
+from report_handlers.data_access import handler as DataAccessHandler
 from report_handlers.location_detail import handler as LocationDetailHandler
 from report_handlers.payroll import handler as PayrollHandler
 from report_handlers.payroll_check import handler as PayrollCheckHandler
@@ -33,6 +34,8 @@ class handler(BaseHTTPRequestHandler):
             "database_setup": DatabaseHandler,
             "lark_sync": SyncHandler,
             "lark_workbook": WorkbookHandler,
+            "import_access": DataAccessHandler,
+            "export_access": DataAccessHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -54,6 +57,9 @@ class handler(BaseHTTPRequestHandler):
             return
         if self.action() == "lark_workbook":
             WorkbookHandler.do_POST(self)
+            return
+        if self.action() == "export_unlock":
+            DataAccessHandler.do_POST(self)
             return
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)
