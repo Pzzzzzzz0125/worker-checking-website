@@ -62,8 +62,9 @@ def workers(base: LarkBase) -> tuple[list[dict], dict[str, dict]]:
             "name": name,
             "active": bool_value(field(record, "Active"), True),
         }
-        output.append(item)
         by_key[key] = item
+        if item["active"]:
+            output.append(item)
     output.sort(key=lambda item: item["name"].casefold())
     return output, by_key
 

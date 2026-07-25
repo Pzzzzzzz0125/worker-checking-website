@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { DollarSign, LoaderCircle, LockKeyhole, Pencil, Save, Search, ShieldCheck, UserCheck, Users } from "lucide-react"
+import { DollarSign, LoaderCircle, LockKeyhole, Pencil, Plus, Save, Search, ShieldCheck, Trash2, UserCheck, Users } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -40,6 +40,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
   const [status, setStatus] = useState<"all" | "active" | "inactive">("all")
   const [draft, setDraft] = useState<WorkerProfile | null>(null)
   const [saving, setSaving] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const [access, setAccess] = useState<WorkerAccess | null>(null)
   const [password, setPassword] = useState("")
   const [unlocking, setUnlocking] = useState(false)
@@ -106,6 +107,52 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
     }
   }
 
+  const addWorker = () => {
+    const nextOrder = Math.max(
+      0,
+      ...(data?.workers || []).map(worker => Number(worker.display_order) || 0),
+    ) + 1
+    setDraft({
+      id: 0,
+      worker_key: "",
+      name: "",
+      normalized_name: "",
+      worker_type: "W2",
+      active: true,
+      daily_rate: 0,
+      display_order: nextOrder,
+      aliases: "",
+      notes: "",
+    })
+  }
+
+  const remove = async () => {
+    if (!draft?.worker_key) return
+    const confirmed = window.confirm(
+      `Remove ${draft.name}? Workers with existing history will be archived so payroll records are preserved.`,
+    )
+    if (!confirmed) return
+    setRemoving(true)
+    try {
+      const result = await postJSON<{ mode: "archived" | "deleted"; history_records: number }>(
+        "/api/workers/delete",
+        { worker_key: draft.worker_key },
+      )
+      setDraft(null)
+      await load()
+      onSaved()
+      toast.success(
+        result.mode === "archived"
+          ? `Worker archived. ${result.history_records} historical work records were preserved.`
+          : "Worker deleted.",
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to remove worker")
+    } finally {
+      setRemoving(false)
+    }
+  }
+
   if (!access) return <div className="page"><Card><CardContent className="flex items-center justify-center gap-3 py-20 text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" />Checking Worker Management access…</CardContent></Card></div>
 
   if (!access.authorized) return <div className="page">
@@ -155,6 +202,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
             <option value="active">Active only</option>
             <option value="inactive">Inactive only</option>
           </select>
+          <Button onClick={addWorker}><Plus className="size-4" />Add worker</Button>
         </div>
       </CardHeader>
       <CardContent>
@@ -178,12 +226,12 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
     <Dialog open={!!draft} onOpenChange={open => { if (!open) setDraft(null) }}>
       {draft && <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit worker profile</DialogTitle>
-          <DialogDescription>Changes are saved directly to the Workers table in Lark Base.</DialogDescription>
+          <DialogTitle>{draft.worker_key ? "Edit worker profile" : "Add worker"}</DialogTitle>
+          <DialogDescription>{draft.worker_key ? "Update the worker’s master information." : "The worker ID and display order are assigned automatically."}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="field-label">Worker key<Input value={draft.worker_key} disabled /></label>
-          <label className="field-label">Normalized name<Input value={draft.normalized_name} disabled /></label>
+          {draft.worker_key && <label className="field-label">Worker key<Input value={draft.worker_key} disabled /></label>}
+          {draft.worker_key && <label className="field-label">Normalized name<Input value={draft.normalized_name} disabled /></label>}
           <label className="field-label sm:col-span-2">Worker name<Input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
           <label className="field-label">Worker type<select className="h-11 rounded-lg border bg-white px-3 text-sm" value={draft.worker_type} onChange={event => setDraft({ ...draft, worker_type: event.target.value as WorkerProfile["worker_type"] })}><option value="W2">W-2 employee</option><option value="1099">1099 contractor</option></select></label>
           <label className="field-label">Daily salary / rate<Input type="number" min="0" step=".01" value={draft.daily_rate} onChange={event => setDraft({ ...draft, daily_rate: Number(event.target.value) })} /></label>
@@ -192,9 +240,10 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
           <label className="field-label sm:col-span-2">Aliases<Input value={draft.aliases} onChange={event => setDraft({ ...draft, aliases: event.target.value })} placeholder="Separate alternate names with semicolons" /></label>
           <label className="field-label sm:col-span-2">Worker notes<Textarea value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} placeholder="Payment schedule, payment method, work status, or other worker-only notes" /></label>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          {draft.worker_key && <Button className="mr-auto" variant="danger" onClick={() => void remove()} disabled={saving || removing}><Trash2 className="size-4" />{removing ? "Removing…" : "Remove worker"}</Button>}
           <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
-          <Button onClick={() => void save()} disabled={saving}><Save className="size-4" />{saving ? "Saving…" : "Save worker"}</Button>
+          <Button onClick={() => void save()} disabled={saving || removing}><Save className="size-4" />{saving ? "Saving…" : draft.worker_key ? "Save worker" : "Add worker"}</Button>
         </div>
       </DialogContent>}
     </Dialog>

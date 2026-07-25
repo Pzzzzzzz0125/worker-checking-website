@@ -37,7 +37,7 @@ def build_bootstrap(base: LarkBase) -> dict:
     workers = []
     for index, record in enumerate(worker_records, start=1):
         name = text_value(field(record, "Name"))
-        if not name:
+        if not name or not bool_value(field(record, "Active"), True):
             continue
         workers.append(
             {

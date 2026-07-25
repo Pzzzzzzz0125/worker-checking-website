@@ -129,6 +129,10 @@ payroll or legal classification review.
   or classification.
 - Edit worker name, W-2/1099 classification, active status, daily salary/rate,
   display order, aliases, and private worker notes.
+- Add workers with an automatically assigned stable worker key.
+- Removing a worker permanently deletes a profile only when it has no work or
+  payroll history. Otherwise, the worker is archived and hidden from new-entry
+  lists while historical payroll records remain available.
 - Worker key remains read-only, and normalized name is regenerated when the
   worker name changes.
 - Saved classification and rate changes flow into payroll estimates; saved
