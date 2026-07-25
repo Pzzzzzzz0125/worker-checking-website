@@ -240,8 +240,11 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
           <label className="field-label sm:col-span-2">Aliases<Input value={draft.aliases} onChange={event => setDraft({ ...draft, aliases: event.target.value })} placeholder="Separate alternate names with semicolons" /></label>
           <label className="field-label sm:col-span-2">Worker notes<Textarea value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} placeholder="Payment schedule, payment method, work status, or other worker-only notes" /></label>
         </div>
+        {draft.id > 0 && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div><strong className="block text-sm text-red-900">Remove this worker</strong><p className="mt-1 text-xs text-red-700">Workers with payroll history will be archived instead of permanently erased.</p></div>
+          <Button variant="danger" onClick={() => void remove()} disabled={saving || removing}><Trash2 className="size-4" />{removing ? "Removing…" : "Remove worker"}</Button>
+        </div>}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          {draft.worker_key && <Button className="mr-auto" variant="danger" onClick={() => void remove()} disabled={saving || removing}><Trash2 className="size-4" />{removing ? "Removing…" : "Remove worker"}</Button>}
           <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
           <Button onClick={() => void save()} disabled={saving || removing}><Save className="size-4" />{saving ? "Saving…" : draft.worker_key ? "Save worker" : "Add worker"}</Button>
         </div>
