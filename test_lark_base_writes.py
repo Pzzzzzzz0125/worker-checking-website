@@ -39,6 +39,29 @@ class LarkBaseWriteTests(unittest.TestCase):
                 [{"Worker Key": "1"}, {"Worker Key": "1"}],
             )
 
+    def test_direct_create_returns_record_ids(self):
+        base = self.base()
+        with patch.object(
+            _lark_base,
+            "lark_api",
+            return_value={
+                "data": {
+                    "records": [
+                        {"record_id": "rec-one"},
+                        {"record_id": "rec-two"},
+                    ]
+                }
+            },
+        ):
+            ids = base.batch_create_records(
+                "Workers",
+                [
+                    {"Worker Key": "1", "Name": "One"},
+                    {"Worker Key": "2", "Name": "Two"},
+                ],
+            )
+        self.assertEqual(ids, ["rec-one", "rec-two"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -230,6 +230,66 @@ class LarkBase:
             self.invalidate_records(table_name)
         return {"created": len(creates), "updated": len(updates)}
 
+    def batch_update_record_ids(self, table_name: str, rows: list[dict]) -> int:
+        """Update known Lark records without listing the whole Base table."""
+        rows = [
+            {
+                "record_id": str(row.get("record_id") or ""),
+                "fields": row.get("fields") or {},
+            }
+            for row in rows
+            if row.get("record_id")
+        ]
+        if not rows:
+            return 0
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records/batch_update"
+        )
+        for offset in range(0, len(rows), 500):
+            lark_api(
+                "POST",
+                path,
+                token=self.token,
+                body={"records": rows[offset : offset + 500]},
+            )
+        self.invalidate_records(table_name)
+        return len(rows)
+
+    def batch_create_records(self, table_name: str, rows: list[dict]) -> list[str]:
+        """Create records and return their Lark IDs in request order."""
+        if not rows:
+            return []
+        table_id = self.table_ids().get(table_name, "")
+        if not table_id:
+            raise LarkAPIError(f"The Lark Base table {table_name!r} does not exist.", status=503)
+        path = (
+            f"/bitable/v1/apps/{quote(self.app_token, safe='')}/tables/"
+            f"{quote(table_id, safe='')}/records/batch_create"
+        )
+        created_ids: list[str] = []
+        for offset in range(0, len(rows), 500):
+            batch = rows[offset : offset + 500]
+            payload = lark_api(
+                "POST",
+                path,
+                token=self.token,
+                body={"records": [{"fields": row} for row in batch]},
+            )
+            created = (payload.get("data") or {}).get("records") or []
+            ids = [str(record.get("record_id") or "") for record in created]
+            if len(ids) != len(batch) or any(not record_id for record_id in ids):
+                raise LarkAPIError(
+                    f"Lark created {table_name} records without returning every record ID.",
+                    status=502,
+                )
+            created_ids.extend(ids)
+        self.invalidate_records(table_name)
+        return created_ids
+
     def delete_record_ids(self, table_name: str, record_ids: list[str]) -> int:
         record_ids = [value for value in dict.fromkeys(record_ids) if value]
         if not record_ids:
