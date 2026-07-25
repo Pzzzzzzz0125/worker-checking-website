@@ -3,7 +3,8 @@
 Production uses one responsive Vercel website. Managed PostgreSQL (currently
 AWS RDS or Neon) is the operational source of truth for worker, work-day,
 location, cost-center, payroll-check, and audit records. Lark remains the OAuth
-identity provider and provides human-readable mirrored Base tables.
+identity provider and provides one human-readable mirrored **Work Log** plus
+small reference/control tables.
 
 Set `DATA_BACKEND=postgres` after the initial Lark-to-PostgreSQL copy is
 verified. Lark OAuth remains enabled for login. Normal operational reads do not
@@ -46,9 +47,11 @@ For an existing PostgreSQL database:
 2. Call `POST /api/database/setup` with confirmation `INITIALIZE POSTGRES` and
    `copy_from_lark:false`. This adds the outbox and Lark record-ID mapping
    tables without replacing PostgreSQL records.
-3. Set `LARK_MIRROR_ENABLED=true` and redeploy.
-4. Optionally queue one complete reconciliation with authenticated
-   administrator request `{"backfill":true,"limit":500}` to
+3. Send an authenticated administrator `POST /api/lark/setup`. This creates
+   the consolidated **Work Log** table and its fields idempotently.
+4. Set `LARK_MIRROR_ENABLED=true` and redeploy.
+5. Queue the initial consolidated reconciliation with authenticated
+   administrator request `{"work_log_backfill":true,"limit":500}` to
    `POST /api/sync/lark`.
 
 Every PostgreSQL upsert or deletion is committed with its outbox event. The
@@ -103,19 +106,23 @@ password-based access path, add `WORKER_ADMIN_PASSWORD` in Vercel and redeploy.
 The password stays server-side; successful unlocks use a user-bound HTTP-only
 cookie that expires after eight hours.
 
-## Lark Base tables
+## Lark Base structure
 
 Use stable field names and do not delete or rename fields after integration.
 
+- **Work Log:** the single visible working-information table, with one row per
+  worker/day; it includes searchable columns and a complete normalized entry.
 - **Workers:** stable worker key, display name, active status, W-2/1099 type,
   daily rate, and display order.
-- **Work Days:** stable day key, linked worker, date, status, total hours,
-  start/end time, extra pay, notes, source, and timestamps.
-- **Location Entries:** linked work day, location, cost center, time range,
-  regular hours, overtime, and display order.
 - **Cost Centers:** cost-center ID, name, and active status.
 - **Payroll Checks:** worker, period start, checked status, checker, and time.
 - **Audit Log:** actor, action, entity key, old/new values, and timestamp.
+
+The operational PostgreSQL model still stores Work Days and Location Entries
+separately so hours, time ranges, and multiple cost centers can be validated.
+The mirror projects those related records into one Work Log row. Existing Lark
+Work Days and Location Entries may be hidden only after reconciliation is
+verified; do not delete them during rollout.
 
 The browser never calls Lark directly. Vercel functions obtain a tenant token
 and perform mirrored Base operations server-side. Website changes become

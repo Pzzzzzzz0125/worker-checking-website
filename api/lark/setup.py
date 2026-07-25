@@ -85,6 +85,24 @@ SCHEMA = {
         ("Source", TEXT),
         ("Created At", DATE),
     ],
+    "Work Log": [
+        ("Entry Key", TEXT),
+        ("Work Date", DATE),
+        ("Worker Key", TEXT),
+        ("Worker Name", TEXT),
+        ("Status", TEXT),
+        ("Normalized Entry", TEXT),
+        ("Total Hours", NUMBER),
+        ("Regular Hours", NUMBER),
+        ("Overtime Hours", NUMBER),
+        ("Extra Pay", NUMBER),
+        ("Locations", TEXT),
+        ("Cost Centers", TEXT),
+        ("Notes", TEXT),
+        ("Source", TEXT),
+        ("Confidence", TEXT),
+        ("Updated At", DATE),
+    ],
 }
 
 

@@ -5,7 +5,8 @@ Developed by Zihao (Paul) Zhao.
 Speed Construction Worker Schedule is a workforce-recording and payroll-review
 web application for Speed Construction. The current production version is a
 responsive React application deployed on Vercel, authenticated with Lark OAuth,
-and backed by Lark Base.
+backed by managed PostgreSQL, and asynchronously mirrored into one
+human-readable Lark Base work log.
 
 Production: [https://workforce-app-theta.vercel.app](https://workforce-app-theta.vercel.app)
 
@@ -24,7 +25,7 @@ Managed PostgreSQL operational records
              |
       durable async mirror
              |
-Lark Base visible tables
+Lark Base Work Log + reference tables
 ```
 
 - The browser never receives the Lark app secret or tenant access token.
@@ -48,7 +49,8 @@ Lark Base visible tables
 - Review total, regular, and overtime hours; active workers; worked/off days;
   average workday; extra pay; and latest activity.
 - Search the latest 50 activity rows. Location and cost-center detail remains on
-  the dedicated reporting pages so Overview needs only one filtered Base read.
+  the dedicated reporting pages so Overview needs only one filtered PostgreSQL
+  read.
 - Returning to the same Overview filter reuses a five-minute browser cache
   unless an app write occurred or the user clicks Refresh.
 
@@ -144,7 +146,7 @@ payroll or legal classification review.
 - Confirmed migration creates only missing keyed records and can safely resume
   by stage after interruption.
 - The imported 2026 dataset currently includes Workers, Cost Centers, Work
-  Days, and Location Entries in Lark Base.
+  Days, and Location Entries in PostgreSQL.
 
 The sidebar also contains AI Reading, Needs Review, and broader export surfaces.
 Their complete production write/export APIs are still being integrated; do not
@@ -278,25 +280,44 @@ upgrade the schema without re-importing stale Lark data:
 
 Then set `LARK_MIRROR_ENABLED=true` and redeploy. Future website writes are
 queued transactionally in PostgreSQL and mirrored to Lark in a separate request.
-To reconcile all existing PostgreSQL records once, an administrator can call
+First run authenticated `POST /api/lark/setup` once after deploying this
+version. It creates the **Work Log** table and any missing fields without
+removing existing records. To reconcile all existing worker/day records into
+that one table, an administrator can call
 `POST /api/sync/lark` with:
 
 ```json
-{"backfill":true,"limit":500}
+{"work_log_backfill":true,"limit":500}
 ```
+
+The app continues draining queued batches while it is open. Re-running the
+request is safe because `Entry Key` is stable and existing rows are updated
+instead of duplicated.
 
 The header reports `AWS and Lark synced`, `Syncing Lark`, or `Lark sync
 pending`. Lark is a visible mirror; PostgreSQL remains the source of truth.
 
-## Primary Lark Base tables
+## Consolidated Lark Work Log
 
-- **Workers** — stable worker key, name, active status, W-2/1099 type, rate, and
-  display order.
-- **Work Days** — worker/date status, total and overtime hours, extra pay,
-  source, confidence, and notes.
-- **Location Entries** — work-day key, location, per-location time range,
-  regular/overtime allocation, and linked cost center.
-- **Cost Centers** — cost-center ID, name, and active status.
-- **Payroll Checks** — worker, payroll period, checked status, checker, and
-  timestamp.
-- **Audit Log** — reserved actor/action/entity history.
+- **Work Log** is the single visible working-information table. Each row is one
+  worker on one date. It contains separate searchable columns for worker, date,
+  status, total/regular/overtime hours, extra pay, locations, and cost centers.
+- **Normalized Entry** stores the complete day in one stable, readable cell.
+  Semicolons separate locations. Every location block contains its time range,
+  allocated hours, and one or more cost-center allocations:
+
+```text
+444 Pocatello [08:30-12:30 | 4h | CC: 100 Framing (4h)];
+111 Main [12:30-18:30 | 6h (4h reg + 2h ot) | CC: 200 Electrical (6h)],
+ot 2h, ex $20
+```
+
+- Off-day reasons remain normalized, such as `off` or `off (vacation)`.
+- **Workers**, **Cost Centers**, **Payroll Checks**, and **Audit Log** remain
+  separate reference/control tables because combining them with daily rows
+  would duplicate sensitive data and make edits ambiguous.
+- Legacy **Work Days** and **Location Entries** tables may be hidden after Work
+  Log counts and several sample days are verified. Do not delete them during
+  the first reconciliation; they provide a rollback/reference copy.
+- Website edits rebuild the complete Work Log row from PostgreSQL. Direct edits
+  to Work Log are not imported back into the website.
