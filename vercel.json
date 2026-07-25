@@ -28,6 +28,18 @@
       "destination": "/api/reports?action=lark_workbook"
     },
     {
+      "source": "/api/import/access",
+      "destination": "/api/reports?action=import_access"
+    },
+    {
+      "source": "/api/export/access",
+      "destination": "/api/reports?action=export_access"
+    },
+    {
+      "source": "/api/export/unlock",
+      "destination": "/api/reports?action=export_unlock"
+    },
+    {
       "source": "/api/payroll/access",
       "destination": "/api/reports?action=payroll_access"
     },

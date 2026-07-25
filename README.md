@@ -137,8 +137,10 @@ payroll or legal classification review.
   separate `WORKER_ADMIN_PASSWORD`. Successful password unlocks use an
   HTTP-only, user-bound cookie that expires after eight hours.
 
-### Lark Drive migration
+### Import
 
+- Import is a separate page restricted to Lark accounts listed in
+  `LARK_ADMIN_OPEN_IDS`; there is no password fallback.
 - The application can verify the three authoritative Lark Drive workbooks
   without changing Base records.
 - Migration preview reports counts, date range, totals, and normalization
@@ -148,10 +150,17 @@ payroll or legal classification review.
 - The imported 2026 dataset currently includes Workers, Cost Centers, Work
   Days, and Location Entries in PostgreSQL.
 
-The sidebar also contains AI Reading, Needs Review, and broader export surfaces.
-Their complete production write/export APIs are still being integrated; do not
-describe those screens as operational until their server routes are deployed
-and verified.
+### Export
+
+- Export is a separate page protected by `EXPORT_PASSWORD`. A successful
+  unlock is bound to the signed-in user in an HTTP-only cookie for eight hours.
+- The current operational export is the connected Excel-style Lark work
+  schedule.
+- The connection is deliberately one-way: PostgreSQL changes are reflected in
+  Lark, while direct Lark edits never overwrite website records.
+- Invoice (`发票`), reporting (`汇报`), and additional document cards are
+  reserved in the Export page. Their generators will be added after approved
+  templates and field mappings are supplied.
 
 ## Time, location, and cost-center rules
 
@@ -240,6 +249,7 @@ Required production configuration includes:
 - `LARK_OAUTH_SCOPES`
 - `LARK_ADMIN_OPEN_IDS`
 - `WORKER_ADMIN_PASSWORD` for optional password access to Worker Management
+- `EXPORT_PASSWORD` for the separate Export page
 - `LARK_VERIFICATION_TOKEN`
 - `LARK_BASE_APP_TOKEN`
 - Lark Base table IDs
