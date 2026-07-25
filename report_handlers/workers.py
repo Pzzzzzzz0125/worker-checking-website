@@ -15,6 +15,7 @@ from api._lark_base import (
     field,
     number_value,
     text_value,
+    formula_string,
     worker_id,
 )
 from api._shared import (
@@ -60,12 +61,7 @@ def list_workers(base: LarkBase) -> list[dict]:
     )
 
 
-def update_worker(base: LarkBase, body: dict) -> dict:
-    key = str(body.get("worker_key") or "").strip()
-    existing = {worker["worker_key"]: worker for worker in list_workers(base)}
-    if not key or key not in existing:
-        raise ValueError("Choose a valid worker.")
-
+def _worker_fields(body: dict, key: str, default_order: int = 0) -> dict:
     name = " ".join(str(body.get("name") or "").split())
     if not name or len(name) > 120:
         raise ValueError("Worker name is required and must be 120 characters or fewer.")
@@ -76,7 +72,7 @@ def update_worker(base: LarkBase, body: dict) -> dict:
         raise ValueError("Active status must be true or false.")
     try:
         daily_rate = round(float(body.get("daily_rate") or 0), 2)
-        display_order = int(float(body.get("display_order") or 0))
+        display_order = int(float(body.get("display_order") or default_order))
     except (TypeError, ValueError):
         raise ValueError("Daily rate and display order must be numbers.") from None
     if daily_rate < 0 or daily_rate > 1_000_000:
@@ -88,7 +84,8 @@ def update_worker(base: LarkBase, body: dict) -> dict:
     if len(aliases) > 2_000 or len(notes) > 5_000:
         raise ValueError("Aliases or notes are too long.")
 
-    fields = {
+    return {
+        "Worker Key": key,
         "Name": name,
         "Normalized Name": normalize_name(name),
         "Worker Type": worker_type,
@@ -98,19 +95,109 @@ def update_worker(base: LarkBase, body: dict) -> dict:
         "Aliases": aliases,
         "Notes": notes,
     }
+
+
+def update_worker(base: LarkBase, body: dict) -> dict:
+    key = str(body.get("worker_key") or "").strip()
+    existing = {worker["worker_key"]: worker for worker in list_workers(base)}
+    if not key or key not in existing:
+        raise ValueError("Choose a valid worker.")
+    fields = _worker_fields(body, key, existing[key]["display_order"])
     base.set_by_key("Workers", "Worker Key", key, fields)
     return {
         **existing[key],
         **{
-            "name": name,
+            "name": fields["Name"],
             "normalized_name": fields["Normalized Name"],
-            "worker_type": worker_type,
-            "active": body["active"],
-            "daily_rate": daily_rate,
-            "display_order": display_order,
-            "aliases": aliases,
-            "notes": notes,
+            "worker_type": fields["Worker Type"],
+            "active": fields["Active"],
+            "daily_rate": fields["Daily Rate"],
+            "display_order": fields["Display Order"],
+            "aliases": fields["Aliases"],
+            "notes": fields["Notes"],
         },
+    }
+
+
+def create_worker(base: LarkBase, body: dict) -> dict:
+    existing = list_workers(base)
+    used_keys = {worker["worker_key"] for worker in existing}
+    numeric_keys = [int(key) for key in used_keys if key.isdigit()]
+    key = str(max(numeric_keys, default=0) + 1)
+    while key in used_keys:
+        key = str(int(key) + 1)
+    default_order = max(
+        (worker["display_order"] for worker in existing),
+        default=0,
+    ) + 1
+    fields = _worker_fields(body, key, default_order)
+    normalized = fields["Normalized Name"]
+    if normalized in {worker["normalized_name"] for worker in existing}:
+        raise ValueError("A worker with this name already exists.")
+    saved = base.set_by_key("Workers", "Worker Key", key, fields)
+    return {
+        "id": worker_id(key, len(existing) + 1),
+        "worker_key": key,
+        "name": fields["Name"],
+        "normalized_name": normalized,
+        "worker_type": fields["Worker Type"],
+        "active": fields["Active"],
+        "daily_rate": fields["Daily Rate"],
+        "display_order": fields["Display Order"],
+        "aliases": fields["Aliases"],
+        "notes": fields["Notes"],
+        "created": bool(saved.get("created", True)),
+    }
+
+
+def remove_worker(base: LarkBase, body: dict) -> dict:
+    key = str(body.get("worker_key") or "").strip()
+    records = base.records("Workers", cache_seconds=0)
+    match = next(
+        (
+            record for record in records
+            if text_value(field(record, "Worker Key")) == key
+        ),
+        None,
+    )
+    if not match:
+        raise ValueError("Choose a valid worker.")
+    work_history = base.records(
+        "Work Days",
+        filter_formula=(
+            f"CurrentValue.[Worker Key]={formula_string(key)}"
+        ),
+        field_names=("Work Day Key",),
+        cache_seconds=0,
+    )
+    payroll_history = base.records(
+        "Payroll Checks",
+        filter_formula=(
+            f"CurrentValue.[Worker Key]={formula_string(key)}"
+        ),
+        field_names=("Payroll Check Key",),
+        cache_seconds=0,
+    )
+    history_records = len(work_history) + len(payroll_history)
+    if history_records:
+        profile = worker_profile(match)
+        profile["active"] = False
+        archived = update_worker(base, profile)
+        return {
+            "removed": True,
+            "mode": "archived",
+            "history_records": history_records,
+            "worker": archived,
+        }
+    deleted = base.delete_record_ids(
+        "Workers",
+        [str(match.get("record_id") or "")],
+    )
+    return {
+        "removed": bool(deleted),
+        "mode": "deleted",
+        "history_records": 0,
+        "worker_key": key,
     }
 
 
@@ -298,10 +385,17 @@ class handler(BaseHTTPRequestHandler):
                     403,
                 )
                 return
-            json_response(
-                self,
-                {"saved": True, "worker": update_worker(DataStore(), body)},
+            base = DataStore()
+            selected_action = action(self)
+            if selected_action == "worker_delete":
+                json_response(self, remove_worker(base, body))
+                return
+            worker = (
+                update_worker(base, body)
+                if str(body.get("worker_key") or "").strip()
+                else create_worker(base, body)
             )
+            json_response(self, {"saved": True, "worker": worker})
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             json_response(self, {"error": f"Invalid worker profile: {error}"}, 400)
         except LarkAPIError as error:

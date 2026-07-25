@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from report_handlers.workers import access_status, list_workers, update_worker
+from report_handlers.workers import (
+    access_status,
+    create_worker,
+    list_workers,
+    remove_worker,
+    update_worker,
+)
 
 
 def record(record_id, **fields):
@@ -11,6 +17,9 @@ def record(record_id, **fields):
 class FakeBase:
     def __init__(self):
         self.saved = None
+        self.deleted = []
+        self.work_days = []
+        self.payroll_checks = []
         self.rows = [
             record(
                 "worker-7",
@@ -45,11 +54,34 @@ class FakeBase:
     def records(self, table_name, **kwargs):
         self.assert_table = table_name
         self.cache_seconds = kwargs.get("cache_seconds")
-        return self.rows
+        if table_name == "Workers":
+            return self.rows
+        if table_name == "Work Days":
+            return self.work_days
+        return self.payroll_checks
 
     def set_by_key(self, table_name, key_field, key, fields):
         self.saved = (table_name, key_field, key, fields)
-        return {"created": False, "record_id": "worker-7"}
+        match = next(
+            (
+                row for row in self.rows
+                if row["fields"].get("Worker Key") == key
+            ),
+            None,
+        )
+        if match:
+            match["fields"].update(fields)
+            return {"created": False, "record_id": match["record_id"]}
+        self.rows.append(record(f"worker-{key}", **fields))
+        return {"created": True, "record_id": f"worker-{key}"}
+
+    def delete_record_ids(self, table_name, record_ids):
+        self.deleted.extend(record_ids)
+        self.rows = [
+            row for row in self.rows
+            if row["record_id"] not in record_ids
+        ]
+        return len(record_ids)
 
 
 class WorkerProfileTests(unittest.TestCase):
@@ -92,8 +124,46 @@ class WorkerProfileTests(unittest.TestCase):
         self.assertEqual(updated["worker_type"], "W2")
         self.assertEqual(updated["daily_rate"], 325.5)
         self.assertEqual(base.saved[0:3], ("Workers", "Worker Key", "7"))
+        self.assertEqual(base.saved[3]["Worker Key"], "7")
         self.assertEqual(base.saved[3]["Normalized Name"], "christopher cong")
         self.assertFalse(base.saved[3]["Active"])
+
+    def test_create_worker_assigns_next_key_and_default_order(self):
+        base = FakeBase()
+        created = create_worker(
+            base,
+            {
+                "name": "New Worker",
+                "worker_type": "W2",
+                "active": True,
+                "daily_rate": 280,
+                "aliases": "",
+                "notes": "",
+            },
+        )
+        self.assertEqual(created["worker_key"], "8")
+        self.assertEqual(created["display_order"], 3)
+        self.assertEqual(base.saved[3]["Worker Key"], "8")
+
+    def test_remove_worker_without_history_deletes_master_record(self):
+        base = FakeBase()
+        result = remove_worker(base, {"worker_key": "7"})
+        self.assertEqual(result["mode"], "deleted")
+        self.assertEqual(base.deleted, ["worker-7"])
+
+    def test_remove_worker_with_history_archives_worker(self):
+        base = FakeBase()
+        base.work_days = [
+            record(
+                "day-1",
+                **{"Work Day Key": "7|2026-07-01", "Worker Key": "7"},
+            )
+        ]
+        result = remove_worker(base, {"worker_key": "7"})
+        self.assertEqual(result["mode"], "archived")
+        self.assertEqual(result["history_records"], 1)
+        self.assertFalse(base.saved[3]["Active"])
+        self.assertEqual(base.deleted, [])
 
     def test_update_worker_rejects_unknown_classification(self):
         with self.assertRaisesRegex(ValueError, "W-2 or 1099"):
