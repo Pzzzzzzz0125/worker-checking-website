@@ -1,324 +1,349 @@
-# Speed Construction Worker Schedule
+# Speed Construction Workforce App
 
-Developed by Zihao (Paul) Zhao.
+Maintainer handoff and implementation reference
+Last reviewed against the code: **July 27, 2026**
 
-Speed Construction Worker Schedule is a workforce-recording and payroll-review
-web application for Speed Construction. The current production version is a
-responsive React application deployed on Vercel, authenticated with Lark OAuth,
-backed by managed PostgreSQL, and asynchronously mirrored into one
-human-readable Lark Base work log.
+This repository contains the production workforce recording and payroll-review
+website developed for Speed Construction. The application records daily work,
+locations, cost centers, hours, overtime, and extra pay; provides payroll and
+location summaries; manages worker profiles; imports the original 2026
+workbooks; and mirrors operational data to Lark for people who prefer a visible
+spreadsheet-style record.
 
-Production: [https://workforce-app-theta.vercel.app](https://workforce-app-theta.vercel.app)
+The application was developed by **Zihao (Paul) Zhao**.
 
-## Current production architecture
+> This README explains how the software works. Use
+> [DEPLOYMENT.md](DEPLOYMENT.md) for account setup, environment variables,
+> deployment, database initialization, backup, recovery, and troubleshooting.
+
+## 1. Production handoff summary
+
+| Item | Current value or owner action |
+| --- | --- |
+| Production URL | `https://workforce-app-theta.vercel.app` |
+| Production Git repository | `https://github.com/Pzzzzzzz0125/workforce-app` |
+| Production branch | `main` |
+| Additional code mirrors | `parcelzz/workforce-app` and `Pzzzzzzz0125/worker-checking-website` |
+| Hosting | Vercel |
+| Operational database | AWS RDS for PostgreSQL, connected through `DATABASE_URL` |
+| Login provider | Lark custom app OAuth |
+| Visible data mirror | Lark Base plus a connected Lark spreadsheet |
+| AI extraction | Google Gemini, called only by the Python backend |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS 4, shadcn-style components |
+| Backend | Python serverless functions |
+
+Before the current maintainer leaves, transfer or document ownership of:
+
+1. the GitHub repository and branch protection;
+2. the Vercel project and production domain;
+3. the PostgreSQL provider/project;
+4. the Lark custom application;
+5. the Lark Base and Drive folder;
+6. the Gemini/Google AI project and billing/quota contact;
+7. the payroll, worker-management, and export passwords in the approved company
+   password manager.
+
+Never put real passwords, API keys, database URLs, payroll files, or employee
+details in this repository.
+
+## 2. Architecture
 
 ```text
-React + TypeScript browser application
-             |
-             v
-Vercel static hosting and Python serverless APIs
-             |
-       Lark OAuth login
-             |
-             v
-Managed PostgreSQL operational records
-             |
-      durable async mirror
-             |
-Lark Base Work Log + connected Lark Spreadsheet
+Browser
+  |
+  | HTTPS + signed HTTP-only cookies
+  v
+Vercel
+  +-- static/app-ui/*       React single-page application
+  +-- api/*.py              small direct Python functions
+  +-- api/reports.py        consolidated business API function
+          |
+          +--------------------------+
+          |                          |
+          v                          v
+     PostgreSQL                 Lark / Gemini
+     source of truth            external services
+          |                          |
+          | transactional outbox    +-- OAuth identity
+          +------------------------->+-- Base Work Log mirror
+                                     +-- connected Lark Sheet
+                                     +-- Drive import files
+                                     +-- Gemini text extraction
 ```
 
-- The browser never receives the Lark app secret or tenant access token.
-- The operational store is selected with `DATA_BACKEND`. `postgres` routes
-  website reads and writes to AWS RDS, Neon, or another PostgreSQL provider.
-- When `LARK_MIRROR_ENABLED=true`, PostgreSQL writes create durable sync tasks.
-  The browser starts a separate batch sync after saves and on application
-  startup, so normal page reads and save responses do not wait for Lark.
-- Lark OAuth remains the website identity provider. Changing storage does not
-  change who is allowed to sign in.
-- Frequently repeated reads are cached briefly, while date-range reports use
-  Lark-side filters instead of downloading the full historical dataset.
-- Local SQLite files remain development/legacy resources and are not the
-  production source of truth.
+### Why `api/reports.py` exists
 
-## Production workflows
+Vercel deploys every Python file under `api/` as a serverless function.
+`vercel.json` rewrites most business routes to one dispatcher,
+`api/reports.py`, to stay within Vercel Hobby function-count limits. The
+dispatcher forwards the request to a module in `report_handlers/`.
+
+### Source of truth
+
+Production should use:
+
+```text
+DATA_BACKEND=postgres
+```
+
+The website reads and writes PostgreSQL. When `LARK_MIRROR_ENABLED=true`, the
+same PostgreSQL transaction also creates an outbox event. A later request sends
+those events to Lark.
+
+This connection is intentionally **one way**:
+
+```text
+website -> PostgreSQL -> Lark Base / Lark Sheet
+```
+
+Direct edits in Lark Base or the connected Sheet do not return to PostgreSQL
+and therefore do not change the website.
+
+The code still supports `DATA_BACKEND=lark` as a migration/rollback adapter,
+but direct Lark reads are much slower and should not be the normal production
+configuration.
+
+## 3. Repository map
+
+```text
+.
+├── api/
+│   ├── auth/                    Lark OAuth login, callback, identity, logout
+│   ├── lark/                    Base setup, Drive migration, event callback
+│   ├── _data_store.py           selects PostgreSQL or Lark adapter
+│   ├── _postgres_base.py        PostgreSQL schema and generic record adapter
+│   ├── _lark_base.py            Lark Base record adapter
+│   ├── _lark_sync.py            asynchronous PostgreSQL-to-Lark mirror
+│   ├── _lark_sheet.py           connected half-month Lark spreadsheet
+│   ├── _work_log.py             consolidated human-readable Work Log format
+│   ├── _reports.py              pay periods, report joins, overtime rules
+│   ├── bootstrap.py             fast worker/cost-center app startup data
+│   ├── bootstrap_details.py     deferred locations/review metadata
+│   ├── summary.py               lightweight Overview API
+│   ├── reports.py               consolidated route dispatcher
+│   └── health.py                public deployment health response
+├── report_handlers/
+│   ├── entries.py               daily/monthly entry read, save, clear, copy
+│   ├── workers.py               worker CRUD and protected access
+│   ├── payroll.py               half-month payroll calculation
+│   ├── payroll_worker_detail.py expanded worker payroll history
+│   ├── location_detail.py       location/cost-center/cost analysis
+│   ├── payroll_check.py         checked-state persistence
+│   ├── ai.py                    review and apply Gemini proposals
+│   ├── database.py              PostgreSQL initialization/copy
+│   ├── sync.py                  mirror status, draining, and backfill
+│   ├── workbook.py              connected spreadsheet initialize/refresh
+│   └── data_access.py           Import/Export authorization
+├── frontend/
+│   ├── src/components/          shell, shared entry editor, UI primitives
+│   ├── src/views/               checking, entries, data, transfers, workers
+│   ├── src/lib/                 API client, types, utility functions
+│   └── vite.config.ts           build and local API proxy
+├── worklog_parser.py            normalized legacy cell parser
+├── xlsx_workbook.py             dependency-free XLSX reader/updater
+├── gemini_parser.py             server-side Gemini structured extraction
+├── test_*.py                    Python unit tests
+├── vercel.json                  Vercel build/function/rewrite configuration
+├── .env.example                 environment-variable inventory
+└── DEPLOYMENT.md                operations and deployment runbook
+```
+
+Generated frontend files live in `static/app-ui/` and `static/index.html`.
+They are built by Vercel and intentionally ignored by Git.
+
+## 4. User-facing functions
 
 ### Overview
 
-- Choose a date range and optionally a worker.
-- Review total, regular, and overtime hours; active workers; worked/off days;
-  average workday; extra pay; and latest activity.
-- Search the latest 50 activity rows. Location and cost-center detail remains on
-  the dedicated reporting pages so Overview needs only one filtered PostgreSQL
-  read.
-- Returning to the same Overview filter reuses a five-minute browser cache
-  unless an app write occurred or the user clicks Refresh.
+- Select a date range and optionally a worker.
+- Shows compact totals and only the latest 50 activity records.
+- Reads Work Days only. It deliberately does not load all Location Entries.
+- Locations are loaded after initial startup by `bootstrap_details` and cached
+  in browser local storage.
+
+This design replaced a graph-heavy overview because repeated pagination of
+thousands of Lark records made the deployed application feel stuck.
 
 ### Payroll check
 
-- Choose a month and either `1–15` or `16–month end`.
-- Review actual hours, California-weighted hours, estimated salary cost,
-  worked/off days, and checked status.
-- Expand a worker directly below their row to see the payment-period work
-  history, location allocation, cost-center allocation, and extra pay.
-- W-2 workers receive daily/weekly/seventh-day California overtime weighting.
-  Properly classified 1099 contractors remain straight-time in the application.
-- Overtime calculation reads the complete workweek even when the week crosses
-  a half-month payroll boundary.
+- Protected by Lark administrator access or `PAYROLL_PASSWORD`.
+- Selects a month and either day 1–15 or day 16–month end.
+- Prioritizes actual hours, overtime, estimated payroll cost, days, and checked
+  state.
+- Clicking a worker expands the history immediately below that worker.
+- The expanded table shows date, each location, allocated location hours, cost
+  centers, regular hours, overtime, double time, actual hours, weighted hours,
+  and estimated daily cost.
+- Time ranges are intentionally hidden in payroll history because historical
+  imports did not contain trustworthy ranges.
+- Checked state is stored in `Payroll Checks`, not browser state.
 
-Payroll values are estimates for review and are not a replacement for final
-payroll or legal classification review.
+Payroll is an estimate and must be reviewed by the company payroll owner.
 
-### Location check
+### Locations
 
-- Search a known location and choose a date range.
-- See total workers, allocated hours, distinct work days, and the first/last
-  recorded dates.
-- Review each worker's hours, days, classification, and estimated labor cost at
-  that location.
-- Location estimates use the saved eight-hour daily rate, California-weighted
-  overtime for W-2 workers, and straight time for 1099 contractors. Extra pay
-  is excluded because it is not assigned to a specific location.
-- Review the cost centers connected to the selected location.
+- Selects a location and date range.
+- Shows workers, hours, days, first/last work date, cost centers, and estimated
+  labor cost.
+- Uses worker classification/rate and the same California weighting helper as
+  payroll.
+- Includes surrounding calendar weeks when calculating W-2 weekly overtime,
+  even when the selected report range begins or ends in the middle of a week.
 
 ### Daily entry
 
-- Choose one day and update multiple workers.
-- Search workers locally after the day loads.
-- Record one or more locations for each worker.
-- Each location supports:
-  - its own optional start and end time;
-  - editable location hours synchronized with its time range;
-  - one or more required cost centers.
-- The first location defaults to `08:30–16:30`. A newly added location starts
-  at the previous location's End and fills the remaining time toward eight
-  hours. Changing an automatically connected previous End updates the next
-  range.
-- Start, End, and Location Hours stay synchronized: changing Start preserves
-  that location's Hours and moves End; changing End recalculates Hours; changing
-  Hours preserves Start and moves End.
-- If every location time is blank, a worked day defaults to eight hours.
-- When location times are entered, all named locations require complete,
-  non-overlapping ranges.
-- Total Hours and Overtime remain visible and editable. Changing either value
-  keeps the last location's Start and adjusts its End, so the location ranges,
-  total, and overtime stay synchronized. Saving is blocked with a clear
-  `Time conflict` message if imported or incomplete values still do not agree.
-- Cost-center search selections are committed automatically. Blue chips show
-  which centers are actually attached to the location.
-- Copy/Paste reuses one worker's day information for another worker.
-- `Clear record` appears after Save, confirms the action, and deletes both the
-  Work Day and its linked Location Entries from Lark before resetting the row.
-- Browser drafts protect unsaved Daily Entry edits across refreshes.
+- Choose one date and edit any number of workers.
+- Worker search filters the page.
+- Copy one worker's day and paste it to another worker.
+- Save one worker or all dirty workers.
+- `Clear record` deletes the saved Work Day and all linked Location Entries
+  after confirmation.
+- Unsaved drafts are kept in browser local storage for the selected date.
+- A global loading indicator appears while API requests are active.
 
 ### Worker entry
 
 - Choose one worker and one month.
-- Edit multiple dates using the same location-time and cost-center rules as
-  Daily Entry.
-- Save one day or all edited days.
-- Clear an individual date with the same confirmed `Clear record` action.
-- Select or deselect every day in the loaded month with one button.
-- Select multiple days and copy them to one or more workers when a crew shared
-  the same schedule.
-- Search the worker checklist inside the copy dialog before selecting targets.
+- Edit several dates for that worker.
+- Select all dates or selected dates.
+- Copy selected dates to one or more workers.
+- Search target workers in the copy dialog.
+- Existing target records on those dates are replaced after confirmation.
+- Newly changed blank days use the same default time behavior as Daily Entry.
+
+### AI reading
+
+1. The user pastes unstructured schedule text and chooses a year.
+2. `/api/ai/parse` sends the text to Gemini from the server.
+3. The response is matched against real workers and cost centers locally.
+4. The page shows confidence, warnings, proposed values, and existing-record
+   warnings.
+5. The user edits/selects rows and explicitly confirms them.
+6. `/api/ai/apply` validates the selected rows again and stores them.
+
+Gemini never writes directly to the database. A missing or ambiguous worker,
+date, location, or required cost center blocks that proposal.
 
 ### Worker management
 
-- View the complete Workers master list and search by name, worker key, alias,
-  or classification.
-- Edit worker name, W-2/1099 classification, active status, daily salary/rate,
-  display order, aliases, and private worker notes.
-- Add workers with an automatically assigned stable worker key.
-- Removing a worker permanently deletes a profile only when it has no work or
-  payroll history. Otherwise, the worker is archived and hidden from new-entry
-  lists while historical payroll records remain available.
-- Worker key remains read-only, and normalized name is regenerated when the
-  worker name changes.
-- Saved classification and rate changes flow into payroll estimates; saved
-  names and active status refresh the entry-page worker lists.
-- Access requires either a Lark identity listed in `LARK_ADMIN_OPEN_IDS` or the
-  separate `WORKER_ADMIN_PASSWORD`. Successful password unlocks use an
-  HTTP-only, user-bound cookie that expires after eight hours.
+- Protected by a configured Lark administrator or
+  `WORKER_ADMIN_PASSWORD`.
+- Search and view active/archived worker profiles.
+- Add a worker. The backend assigns the next stable numeric Worker Key.
+- Edit name, W-2/1099 type, rate, active state, display order, aliases, and
+  notes.
+- Worker Key is immutable; Normalized Name is generated by the backend.
+- Removing a worker with no history permanently deletes the profile.
+- Removing a worker with Work Days or Payroll Checks archives it instead.
+  Archived workers disappear from new entry lists while payroll history remains.
 
 ### Import
 
-- Import is a separate page restricted to Lark accounts listed in
-  `LARK_ADMIN_OPEN_IDS`; there is no password fallback.
-- The application can verify the three authoritative Lark Drive workbooks
-  without changing Base records.
-- Migration preview reports counts, date range, totals, and normalization
-  warnings.
-- Confirmed migration creates only missing keyed records and can safely resume
-  by stage after interruption.
-- The imported 2026 dataset currently includes Workers, Cost Centers, Work
-  Days, and Location Entries in PostgreSQL.
+- Restricted to Lark identities in `LARK_ADMIN_OPEN_IDS`; there is no password
+  fallback.
+- Reads exactly three files from the configured Lark Drive folder:
+  - `2026 Worker's information - location standardized.xlsx`
+  - `Cost Code and Cost Type Keep the Most Updated.xlsx`
+  - `Speed Payroll.xlsx`
+- Preview is read-only and reports counts, totals, date range, and warnings.
+- Confirmed import runs resumable stages and creates only missing stable keys.
+- This importer is a historical bootstrap tool, not the daily update path.
 
 ### Export
 
-- Export is a separate page protected by `EXPORT_PASSWORD`. A successful
-  unlock is bound to the signed-in user in an HTTP-only cookie for eight hours.
-- The current operational export is the connected Excel-style Lark work
-  schedule.
-- The connection is deliberately one-way: PostgreSQL changes are reflected in
-  Lark, while direct Lark edits never overwrite website records.
-- Invoice (`发票`), reporting (`汇报`), and additional document cards are
-  reserved in the Export page. Their generators will be added after approved
-  templates and field mappings are supplied.
+- Protected by `EXPORT_PASSWORD`, even for Lark administrators.
+- The unlock cookie is signed, bound to the signed-in user, and expires in
+  eight hours.
+- The implemented export is the connected **Speed Construction Work Schedule**
+  Lark spreadsheet.
+- Future Invoice (`发票`) and Report (`汇报`) cards are placeholders until
+  approved templates and field mappings are supplied.
 
-## Time, location, and cost-center rules
+### Needs review
 
-- A worked day requires at least one location and every location requires at
-  least one cost center.
-- Location time ranges are optional only as a complete set: either all location
-  times are blank, or every named location has both Start and End.
-- Blank location times preserve the normalized default of eight total hours.
-- Entered location ranges calculate the actual daily total.
-- Ranges cannot end before they start or overlap another location range.
-- Daily overtime must equal hours above eight when explicitly entered.
-- Multiple cost centers divide a location's regular/overtime allocation without
-  introducing rounding drift. For example, eight hours across three centers is
-  stored as `2.67 + 2.67 + 2.66`, not `8.01`.
-- New web entries do not store a day-level start/end range; time belongs to each
-  Location Entry.
+The page is retained for low-confidence imported records. The current
+`review_count` is derived from Work Days whose Confidence is `low`. Review
+routes are legacy/incomplete compared with the AI review flow; verify the API
+route before expanding this page.
 
-## Normalized work cells
+## 5. Entry model and validation rules
 
-The importer and display preview use one canonical format:
+### One day has two levels
 
-- `off`
-- `off (vacation)`
-- `444` — one location, default eight hours
-- `444;111` — multiple locations sharing eight total hours
-- `432(3);1151(5)` — explicit location-hour allocation
-- `669, ot 2h` — eight regular hours plus two overtime hours
-- `1545, ex $20` — separate extra pay
-- `1545, ot 2h, ex $20` — overtime and extra pay together
-
-Semicolon is the canonical location separator. Extra pay is never converted
-into work hours. Low-confidence imported values remain identifiable for review
-instead of being silently guessed.
-
-## Authentication and access
-
-- Anyone with the Vercel URL can reach the public sign-in surface.
-- Workforce and payroll APIs require a signed Lark session.
-- The Lark app's released-version **Availability scope** controls which Lark
-  users can authorize login.
-- Every currently authorized application user has the same normal entry and
-  report capabilities; broader Admin, Foreman, and Viewer roles are not yet
-  implemented.
-- Worker Management, Base initialization, and Drive migration require a
-  configured Lark administrator. Worker Management can also be unlocked with
-  the separate server-side management password.
-- Sessions are signed, HTTP-only, SameSite cookies with a 12-hour lifetime.
-
-The Lark Base collaborator list is separate from website access. The server
-uses the application's tenant token, so application authorization must remain
-restricted to approved users.
-
-## Local development
-
-The current frontend requires Node.js for development:
-
-```bash
-cd frontend
-npm ci
-npm run build
+```text
+Work Day
+  worker, date, status, daily totals, extra pay, notes
+  |
+  +-- Location Entry
+  |     location, start/end, regular/OT allocation, cost center
+  |
+  +-- Location Entry
+        ...
 ```
 
-The compiled assets are written to `static/app-ui`. They are generated during
-the Vercel build and are intentionally excluded from Git.
+One visual location can generate multiple stored Location Entry rows when it
+has multiple cost centers. The hours are divided across those rows while the UI
+recombines them into one location.
 
-Run the Python test suite with:
+### Required values
 
-```bash
-python3 -m unittest discover -v
+- Worked day: at least one location.
+- Every worked location: at least one cost center.
+- Off day: no location requirement and zero work hours.
+- Cost-center options come from active `Cost Centers` records.
+
+### Time and hour behavior
+
+- A new first location defaults to `08:30–16:30` and 8 hours.
+- A new second/subsequent location starts at the previous End and fills the
+  remaining time toward 8 hours.
+- Start, End, and Location Hours are linked:
+  - changing Start preserves hours and moves End;
+  - changing End recalculates hours;
+  - changing Location Hours preserves Start and moves End.
+- Total Hours and Overtime Hours are also linked to the last location's End.
+- Hour number inputs step by **0.5 hour**.
+- If all time ranges are blank, a worked day defaults to 8 total hours.
+- If any location uses time, all named locations need complete Start and End
+  values.
+- Ranges cannot end before they start or overlap.
+- The sum of location ranges must match Total Hours.
+- Explicit Overtime must match `max(Total Hours - 8, 0)`.
+- Contradictions are rejected at save time with a `Time conflict` message.
+
+Historical rows imported from the original workbook can have blank time ranges.
+Do not manufacture ranges for old data merely to fill the UI.
+
+### Multiple cost centers and rounding
+
+A location may have several cost centers. The backend distributes regular and
+overtime hours while preserving the original location total. Remainders are
+placed into the final allocation, so an eight-hour location split three ways is
+`2.67 + 2.67 + 2.66`, not `8.01`.
+
+### Normalized text format
+
+Legacy cells and visible mirrors use one normalized style:
+
+```text
+off
+off (vacation)
+444
+444;111
+432(3);1151(5)
+669, ot 2h
+1545, ex $20
+1545, ot 2h, ex $20
 ```
 
-## Deployment
+- Semicolon is the location separator.
+- A location without explicit allocation participates in the daily default of
+  eight hours; it does not receive eight hours by itself.
+- Parentheses after a location are that location's hours.
+- `ot` is overtime.
+- `ex $` is money and is never converted into hours.
 
-Vercel builds the React frontend and deploys Python files under `api/` as
-serverless functions. Report and entry routes are consolidated behind one
-function to remain within the Vercel Hobby function limit.
-
-Required production configuration includes:
-
-- `APP_URL`
-- `DATA_BACKEND`
-- `DATABASE_URL` when PostgreSQL is selected
-- `LARK_MIRROR_ENABLED` after the mirror schema has been initialized
-- `LARK_APP_ID`
-- `LARK_APP_SECRET`
-- `LARK_OAUTH_SCOPES`
-- `LARK_ADMIN_OPEN_IDS`
-- `WORKER_ADMIN_PASSWORD` for optional password access to Worker Management
-- `EXPORT_PASSWORD` for the separate Export page
-- `LARK_VERIFICATION_TOKEN`
-- `LARK_BASE_APP_TOKEN`
-- Lark Base table IDs
-- `LARK_DRIVE_FOLDER_TOKEN`
-- `SESSION_SECRET`
-- `GEMINI_API_KEY` when AI endpoints are enabled
-
-Gemini parsing runs only on the server. `/api/ai/parse` returns proposed records
-for review, and `/api/ai/apply` writes only the records the user explicitly
-confirms.
-
-Never commit real secrets, payroll workbooks, private Drive exports, or local
-SQLite databases. See [DEPLOYMENT.md](DEPLOYMENT.md) and
-[.env.example](.env.example) for configuration details.
-
-## PostgreSQL migration and Lark mirror
-
-Connect AWS RDS, Neon, or another managed PostgreSQL service and configure its
-TLS connection string as `DATABASE_URL`. Keep
-`DATA_BACKEND=lark` until the initial copy is complete. Redeploy, sign in as a
-configured Lark administrator, and call `POST /api/database/setup` with:
-
-```json
-{"confirm":"INITIALIZE POSTGRES","copy_from_lark":true}
-```
-
-The operation creates the PostgreSQL schema and upserts all six operational
-tables from Lark Base. Verify the returned counts, then change
-`DATA_BACKEND=postgres` and redeploy. After that switch, entries, payroll checks,
-AI-confirmed rows, and worker updates use PostgreSQL.
-
-Before enabling the visible Lark mirror on an existing PostgreSQL database,
-upgrade the schema without re-importing stale Lark data:
-
-```json
-{"confirm":"INITIALIZE POSTGRES","copy_from_lark":false}
-```
-
-Then set `LARK_MIRROR_ENABLED=true` and redeploy. Future website writes are
-queued transactionally in PostgreSQL and mirrored to Lark in a separate request.
-First run authenticated `POST /api/lark/setup` once after deploying this
-version. It creates the **Work Log** table and any missing fields without
-removing existing records. To reconcile all existing worker/day records into
-that one table, an administrator can call
-`POST /api/sync/lark` with:
-
-```json
-{"work_log_backfill":true,"limit":500}
-```
-
-The app continues draining queued batches while it is open. Re-running the
-request is safe because `Entry Key` is stable and existing rows are updated
-instead of duplicated.
-
-The header reports `AWS and Lark synced`, `Syncing Lark`, or `Lark sync
-pending`. Lark is a visible mirror; PostgreSQL remains the source of truth.
-
-## Consolidated Lark Work Log
-
-- **Work Log** is the single visible working-information table. Each row is one
-  worker on one date. It contains separate searchable columns for worker, date,
-  status, total/regular/overtime hours, extra pay, locations, and cost centers.
-- **Normalized Entry** stores the complete day in one stable, readable cell.
-  Semicolons separate locations. Every location block contains its time range,
-  allocated hours, and one or more cost-center allocations:
+The consolidated Lark Work Log contains a richer form:
 
 ```text
 444 Pocatello [08:30-12:30 | 4h | CC: 100 Framing (4h)];
@@ -326,32 +351,384 @@ pending`. Lark is a visible mirror; PostgreSQL remains the source of truth.
 ot 2h, ex $20
 ```
 
-- Off-day reasons remain normalized, such as `off` or `off (vacation)`.
-- **Workers**, **Cost Centers**, **Payroll Checks**, and **Audit Log** remain
-  separate reference/control tables because combining them with daily rows
-  would duplicate sensitive data and make edits ambiguous.
-- Legacy **Work Days** and **Location Entries** tables may be hidden after Work
-  Log counts and several sample days are verified. Do not delete them during
-  the first reconciliation; they provide a rollback/reference copy.
-- Website edits rebuild the complete Work Log row from PostgreSQL. Direct edits
-  to Work Log are not imported back into the website.
+## 6. Payroll rules implemented in code
 
-## Connected Lark Spreadsheet
+`api/_reports.py::california_overtime` is the single overtime helper used by
+payroll and location cost estimates.
 
-An administrator can create one Drive spreadsheet named **Speed Construction
-Work Schedule** through `POST /api/lark/workbook`. It mirrors the original
-payroll workbook layout:
+### Classification
 
-- one worksheet per half-month payroll period;
-- dates across row 1 and worker names down column A;
-- one worker/date cell containing locations, location time ranges,
-  regular/overtime allocation, cost-center IDs and names, totals, extra pay,
-  notes, source, and confidence;
-- frozen date and worker headers;
-- navy headers and bordered work cells.
+- `W2`: receives daily, weekly, and seventh-consecutive-day weighting.
+- `1099`: actual hours are not automatically weighted by statutory overtime in
+  this application.
+- The imported payroll convention is **red name = W-2** and
+  **black name = 1099**.
 
-The workbook token and stable worker-row assignments are stored in PostgreSQL.
-Future entry edits update only the corresponding cells through the existing
-asynchronous Lark sync queue, so website reads and saves do not wait for Sheets.
-The spreadsheet is a read-only reporting view: direct Sheet edits do not update
-PostgreSQL.
+### W-2 calculation
+
+- first 8 hours in a day: `1.0x`;
+- hours over 8 through 12: `1.5x`;
+- hours over 12: `2.0x`;
+- regular hours beyond 40 in a Monday–Sunday week become `1.5x`;
+- on the seventh worked day in the week, first 8 hours are `1.5x` and remaining
+  hours are `2.0x`.
+
+Pay-period boundaries do not reset a week. For a 1–15 or 16–end report, the
+backend reads the complete surrounding Monday–Sunday weeks, computes overtime,
+and returns only the selected pay-period dates.
+
+Estimated pay is:
+
+```text
+weighted hours × (daily rate / 8) + extra pay
+```
+
+Amounts are rounded to two decimals after aggregation.
+
+> This is application behavior, not legal advice. If the company's workweek,
+> exemption rules, contractor classification, union agreement, or California
+> requirements change, payroll management must approve corresponding code and
+> tests.
+
+## 7. Logical data model
+
+| Logical table | Stable key | Purpose |
+| --- | --- | --- |
+| Workers | `Worker Key` | identity, classification, rate, aliases, active state |
+| Work Days | `Work Day Key` | one worker/date status and daily totals |
+| Location Entries | `Location Entry Key` | location, cost center, range, allocated hours |
+| Cost Centers | `Cost Center ID` | selectable cost-center reference |
+| Payroll Checks | `Payroll Check Key` | checked state per worker/pay period |
+| Audit Log | `Audit Key` | actor and old/new JSON for changes |
+| Work Log | `Entry Key` | Lark-only consolidated worker/day projection |
+
+Typical keys:
+
+```text
+Work Day Key       = <worker key>|<YYYY-MM-DD>
+Location Entry Key = <work day key>|<location/allocation suffix>
+Payroll Check Key  = <worker key>|<period start>
+```
+
+Do not change stable keys to array indexes or names. Worker names and display
+order can change; keys provide idempotent imports, updates, deletes, and mirror
+mapping.
+
+## 8. PostgreSQL physical schema
+
+The PostgreSQL adapter intentionally uses a generic JSONB record store so the
+same report code can use either the Lark or PostgreSQL adapter.
+
+### `workforce_tables`
+
+Registry of logical tables. `table_name` is the primary key.
+
+### `workforce_records`
+
+```text
+table_name   logical table
+record_id    generated/internal record ID
+key_field    logical key field name
+key_value    stable logical key
+fields       complete logical record as JSONB
+created_at
+updated_at
+```
+
+Primary key: `(table_name, record_id)`
+Unique constraint: `(table_name, key_value)`
+
+### `workforce_sync_outbox`
+
+Transactional Lark mirror queue. Stores `upsert` or `delete`, attempt status,
+retry time, lock time, error, and sync timestamp. Events that fail return to
+`pending` after 30 seconds. A processing lease expires after five minutes.
+Successfully synced rows are retained for seven days and then pruned.
+
+### `workforce_lark_mirror_keys`
+
+Maps each PostgreSQL `(table_name, key_value)` to its Lark `record_id`, avoiding
+full-table searches before every mirror update.
+
+### `workforce_settings`
+
+Stores integration configuration that belongs with the database. The connected
+workbook uses setting key `lark_work_schedule` for spreadsheet token, URL,
+year, and stable worker-row assignments.
+
+## 9. Lark representation
+
+### Base tables
+
+`POST /api/lark/setup` idempotently creates missing tables and fields:
+
+- Workers
+- Work Days
+- Location Entries
+- Cost Centers
+- Payroll Checks
+- Audit Log
+- Work Log
+
+It does not delete records or rename fields. Field definitions are in
+`api/lark/setup.py::SCHEMA`.
+
+### Consolidated Work Log
+
+Work Days and Location Entries are projected into one searchable Lark row per
+worker/date. Workers, Cost Centers, Payroll Checks, and Audit Log remain
+separate because combining reference/security data with daily work would create
+duplicates and ambiguous edits.
+
+### Connected spreadsheet
+
+The **Speed Construction Work Schedule** workbook contains:
+
+- one worksheet for every half-month period;
+- dates in row 1;
+- worker names in column A;
+- a normalized worker/date cell containing the complete work block;
+- frozen headers, navy formatting, wide work columns, and tall rows.
+
+The workbook token and row assignments are stored in PostgreSQL, so refreshes
+continue using the same workbook link. `refresh` rebuilds it and reapplies the
+application's sizes. Incremental website updates change only affected
+worker/date cells.
+
+## 10. Authentication and authorization
+
+### Lark login
+
+1. `/api/auth/lark/login` creates a signed OAuth state and stores it in a
+   10-minute HTTP-only cookie.
+2. Lark redirects to `/api/auth/lark/callback`.
+3. The callback validates state and exchanges the code server-side.
+4. The backend reads the Lark user identity.
+5. A signed `workforce_session` HTTP-only, SameSite=Lax cookie is created for
+   12 hours.
+
+The Lark App Secret and access token never enter frontend JavaScript.
+
+### Current access model
+
+| Capability | Requirement |
+| --- | --- |
+| Normal pages and entry | valid Lark session |
+| Payroll | Lark admin or `PAYROLL_PASSWORD` grant |
+| Worker management | Lark admin or `WORKER_ADMIN_PASSWORD` grant |
+| Import/migration | Lark admin only |
+| Export/workbook | `EXPORT_PASSWORD` grant |
+| Base/PostgreSQL setup and backfill | Lark admin only |
+
+Password grants are signed, user-bound HTTP-only cookies valid for eight hours.
+Passwords are checked with constant-time comparison. `LARK_ADMIN_OPEN_IDS` is a
+comma-separated server-side allowlist.
+
+The Lark app's published availability controls who can log in at all. The Lark
+Base collaborator list is separate from website access because server-side Base
+calls use the app's tenant token.
+
+## 11. API map
+
+All business APIs require Lark login unless marked public.
+
+| Method | Route | Purpose / extra authorization |
+| --- | --- | --- |
+| GET | `/api/health` | public backend selection check |
+| GET | `/api/auth/lark/login` | start OAuth |
+| GET | `/api/auth/lark/callback` | OAuth callback |
+| GET | `/api/auth/me` | current session identity |
+| GET | `/api/auth/logout` | clear session |
+| GET | `/api/bootstrap` | workers and cost centers |
+| GET | `/api/bootstrap_details` | locations and review metadata |
+| GET | `/api/summary` | Overview range summary |
+| GET | `/api/payroll` | pay-period totals; payroll access |
+| GET | `/api/payroll_worker_detail` | expanded history; payroll access |
+| POST | `/api/payroll_check` | update checked state; payroll access |
+| GET | `/api/location_detail` | location/cost-center/cost analysis |
+| GET/POST | `/api/day` | one-date entry load/save |
+| POST | `/api/day/clear` | delete one worker/date and allocations |
+| GET | `/api/worker-month` | month for one worker |
+| POST | `/api/worker-days` | save selected worker dates |
+| POST | `/api/worker-days/copy` | copy selected dates to target workers |
+| GET/POST | `/api/workers` | list/save profiles; management access |
+| POST | `/api/workers/delete` | archive or delete; management access |
+| GET | `/api/workers/access` | management authorization state |
+| POST | `/api/workers/unlock` | issue management password grant |
+| GET | `/api/payroll/access` | payroll authorization state |
+| POST | `/api/payroll/unlock` | issue payroll password grant |
+| POST | `/api/ai/parse` | Gemini proposal |
+| POST | `/api/ai/apply` | validate and save selected proposals |
+| GET | `/api/import/access` | admin-only import access state |
+| GET | `/api/export/access` | export access state |
+| POST | `/api/export/unlock` | issue export password grant |
+| GET/POST | `/api/lark/migration` | preview/staged historical import; admin |
+| GET/POST | `/api/database/setup` | inspect/initialize PostgreSQL; admin |
+| GET/POST | `/api/lark/setup` | inspect/initialize Base schema; admin on POST |
+| GET/POST | `/api/sync/lark` | mirror status/drain/backfill |
+| GET/POST | `/api/lark/workbook` | workbook status/initialize/refresh; export access on POST |
+| GET/POST | `/api/lark/events` | optional Lark callback verification/ack |
+
+When adding an endpoint, update both `api/reports.py` and the matching rewrite
+in `vercel.json` if it is dispatched through the consolidated function.
+Forgetting either side commonly produces `404 Request failed`.
+
+## 12. Frontend data flow and perceived loading
+
+`frontend/src/lib/api.ts` wraps `fetch`, converts non-2xx JSON responses to
+`ApiError`, emits a global request-count event for the spinner, and triggers
+background Lark sync after successful writes.
+
+Startup is split:
+
+1. `/api/bootstrap` returns the small essential worker/cost-center set.
+2. cached location suggestions are used immediately when available;
+3. `/api/bootstrap_details` loads locations and review metadata in the
+   background and refreshes local storage;
+4. page bundles are lazy-loaded;
+5. a small Lark sync request runs after the UI becomes usable.
+
+This avoids blocking initial rendering on all Location Entries.
+
+If production becomes slow again, first determine whether the delay is:
+
+- Vercel cold start;
+- PostgreSQL connection latency/region mismatch;
+- an unindexed or full-record read;
+- a large response/render;
+- Lark mirror backlog;
+- direct Lark backend accidentally enabled.
+
+Do not assume upgrading Vercel fixes database/network design problems.
+
+## 13. Local development
+
+Prerequisites:
+
+- Python 3.11 or newer;
+- Node.js compatible with the checked-in frontend lockfile;
+- access to a safe development PostgreSQL database;
+- a development Lark app or explicit permission to use the production app.
+
+Install/build the frontend:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+For full local API work, use the Vercel CLI from the repository root:
+
+```bash
+vercel dev --listen 8000
+```
+
+In a second terminal, start Vite. Its development proxy expects the API at
+port 8000:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Use a local `.env` copied from `.env.example`; `.env` files are ignored. Never
+use production payroll data for casual UI development.
+
+## 14. Testing and release checks
+
+Python tests:
+
+```bash
+python3 -m unittest discover -v
+```
+
+Frontend type-check and production build:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+At this handoff, the Python suite contains **53 tests** with one workbook test
+skipped when the private payroll reference workbook is not present.
+
+Before merging a change:
+
+1. run the Python suite;
+2. build the frontend;
+3. verify no generated assets or secrets are staged;
+4. review `git diff`;
+5. deploy a Vercel Preview;
+6. sign in and test the affected flow with non-sensitive test data;
+7. check `/api/health`;
+8. verify Production after merge;
+9. confirm Lark sync status if the change writes data.
+
+High-risk changes require focused manual checks:
+
+- payroll/overtime: test a week crossing the 15th/16th boundary;
+- entry validation: one/multiple locations and multiple cost centers;
+- deletes: worker with and without history;
+- schema/migration: run against a disposable database first;
+- authentication: test signed-out, normal user, admin, and password grant.
+
+## 15. Change guidelines
+
+- Preserve stable key formats.
+- Add or update tests for business rules.
+- Use the `DataStore()` adapter rather than directly instantiating Lark in
+  normal report/entry handlers.
+- Keep PostgreSQL writes and outbox creation in the same transaction.
+- Never make normal saves wait for Lark.
+- Never accept AI output without local validation and human confirmation.
+- Never infer historical time ranges that were not in the source.
+- Treat worker classification and rates as sensitive payroll data.
+- Avoid a second source of truth.
+- Keep `.env.example`, this README, and DEPLOYMENT.md current whenever
+  configuration or operations change.
+
+## 16. Known limitations and future work
+
+- Normal signed-in users do not yet have Foreman/Viewer roles; role granularity
+  is limited to protected sections.
+- Lark mirroring is triggered by app activity, not a dedicated continuous
+  worker or cron. A closed app can leave pending rows until the next drain.
+- The Lark event endpoint acknowledges callbacks but does not import Lark edits.
+- Connected Lark Sheet and Work Log are reporting mirrors, not two-way editors.
+- Needs Review has legacy UI assumptions and should be verified before new use.
+- Invoice and formal report exports need approved samples and acceptance rules.
+- There is no automated browser end-to-end suite.
+- Python runtime version is not explicitly pinned in repository configuration;
+  verify Vercel's selected runtime before adopting version-specific features.
+- Payroll remains an estimate; it is not a payroll filing or payment system.
+
+## 17. Where to start when maintaining
+
+For a UI or entry issue:
+
+1. reproduce it in a Vercel Preview;
+2. inspect `frontend/src/views/entry.tsx` and
+   `frontend/src/components/location-editor.tsx`;
+3. inspect validation/storage in `report_handlers/entries.py`;
+4. add a regression test in `test_entries.py`.
+
+For payroll:
+
+1. inspect `api/_reports.py`;
+2. inspect the relevant payroll handler;
+3. add boundary tests in `test_reports.py`;
+4. obtain payroll-owner approval.
+
+For deployment/database problems:
+
+1. read [DEPLOYMENT.md](DEPLOYMENT.md);
+2. check `/api/health`;
+3. verify Vercel Production environment variables;
+4. verify PostgreSQL reachability and schema;
+5. inspect Vercel function logs;
+6. inspect `/api/sync/lark` separately from normal database health.
+
+For data loss concerns, stop writes, preserve the database, and follow the
+backup/recovery section in DEPLOYMENT.md before attempting a migration or
+manual repair.
