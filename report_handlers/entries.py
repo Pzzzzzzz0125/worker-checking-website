@@ -228,6 +228,8 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
     worker = worker_map.get(key)
     if not worker:
         raise ValueError(f"Worker {key or '(blank)'} does not exist.")
+    if not worker["active"]:
+        raise ValueError(f"{worker['name']} is archived. Restore the worker before saving entries.")
     work_date = date.fromisoformat(str(raw.get("date") or raw.get("work_date") or ""))
     status = str(raw.get("status") or "worked").casefold()
     if status not in {"worked", "off"}:
@@ -519,7 +521,7 @@ class handler(BaseHTTPRequestHandler):
                 month = query.get("month", [""])[0]
                 year, month_number = (int(value) for value in month.split("-", 1))
                 worker = worker_map.get(worker_key)
-                if not worker:
+                if not worker or not worker["active"]:
                     raise ValueError("Choose a valid worker.")
                 last = calendar.monthrange(year, month_number)[1]
                 start = date(year, month_number, 1)
@@ -574,7 +576,7 @@ class handler(BaseHTTPRequestHandler):
                 return
             if action == "day_clear":
                 worker_key = str(int(body.get("worker_id") or 0))
-                if worker_key not in worker_map:
+                if worker_key not in worker_map or not worker_map[worker_key]["active"]:
                     raise ValueError("Choose a valid worker.")
                 json_response(
                     self,
@@ -586,6 +588,8 @@ class handler(BaseHTTPRequestHandler):
                 targets = [str(int(value)) for value in body.get("target_worker_ids") or []]
                 if not source_rows or not targets:
                     raise ValueError("Choose days and at least one target worker.")
+                if any(target not in worker_map or not worker_map[target]["active"] for target in targets):
+                    raise ValueError("Copy targets must be active workers.")
                 rows = [
                     {**row, "forced_worker": target, "override_by": actor}
                     for target in targets for row in source_rows

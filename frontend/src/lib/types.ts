@@ -41,7 +41,6 @@ export type Bootstrap = {
   cost_centers: CostCenter[]
   locations: string[]
   ai_configured: boolean
-  review_count: number
   last_recorded_date: string
   workbook_year: number
 }

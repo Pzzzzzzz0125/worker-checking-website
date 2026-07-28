@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { DollarSign, LoaderCircle, LockKeyhole, Pencil, Plus, Save, Search, ShieldCheck, Trash2, UserCheck, Users } from "lucide-react"
+import { Archive, ArchiveRestore, LoaderCircle, LockKeyhole, Pencil, Plus, Save, Search, ShieldCheck, UserCheck, Users } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,7 +24,7 @@ type WorkerProfile = {
 
 type WorkerResponse = {
   workers: WorkerProfile[]
-  totals: { workers: number; active: number; w2: number; contractors: number }
+  totals: { workers: number; active: number; archived: number; w2: number; contractors: number }
 }
 
 type WorkerAccess = {
@@ -37,10 +37,11 @@ type WorkerAccess = {
 export function WorkersView({ onSaved }: { onSaved: () => void }) {
   const [data, setData] = useState<WorkerResponse | null>(null)
   const [search, setSearch] = useState("")
-  const [status, setStatus] = useState<"all" | "active" | "inactive">("all")
+  const [status, setStatus] = useState<"active" | "archived">("active")
   const [draft, setDraft] = useState<WorkerProfile | null>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [restoring, setRestoring] = useState(false)
   const [access, setAccess] = useState<WorkerAccess | null>(null)
   const [password, setPassword] = useState("")
   const [unlocking, setUnlocking] = useState(false)
@@ -83,7 +84,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
     const query = search.trim().toLowerCase()
     return (data?.workers || []).filter(worker => {
       if (status === "active" && !worker.active) return false
-      if (status === "inactive" && worker.active) return false
+      if (status === "archived" && worker.active) return false
       return !query || [worker.name, worker.worker_key, worker.aliases, worker.worker_type]
         .some(value => String(value).toLowerCase().includes(query))
     })
@@ -129,27 +130,43 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
   const remove = async () => {
     if (!draft?.worker_key) return
     const confirmed = window.confirm(
-      `Remove ${draft.name}? Workers with existing history will be archived so payroll records are preserved.`,
+      `Archive ${draft.name}? The worker will disappear from entries and reports, but historical records will be preserved.`,
     )
     if (!confirmed) return
     setRemoving(true)
     try {
-      const result = await postJSON<{ mode: "archived" | "deleted"; history_records: number }>(
+      const result = await postJSON<{ mode: "archived"; history_records: number }>(
         "/api/workers/delete",
         { worker_key: draft.worker_key },
       )
       setDraft(null)
       await load()
       onSaved()
-      toast.success(
-        result.mode === "archived"
-          ? `Worker archived. ${result.history_records} historical work records were preserved.`
-          : "Worker deleted.",
-      )
+      toast.success(`Worker archived. ${result.history_records} historical records were preserved.`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to remove worker")
+      toast.error(error instanceof Error ? error.message : "Unable to archive worker")
     } finally {
       setRemoving(false)
+    }
+  }
+
+  const restore = async () => {
+    if (!draft?.worker_key) return
+    setRestoring(true)
+    try {
+      const result = await postJSON<{ restored: boolean; worker: WorkerProfile }>(
+        "/api/workers/restore",
+        { worker_key: draft.worker_key },
+      )
+      setDraft(null)
+      setStatus("active")
+      await load()
+      onSaved()
+      toast.success(`${result.worker.name} was restored and is available throughout the app.`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to restore worker")
+    } finally {
+      setRestoring(false)
     }
   }
 
@@ -180,10 +197,10 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
     </div>
 
     <div className="metric-grid mb-5">
-      <ProfileMetric icon={Users} label="Workers" value={data?.totals.workers || 0} />
+      <ProfileMetric icon={Users} label="Total records" value={data?.totals.workers || 0} />
       <ProfileMetric icon={UserCheck} label="Active" value={data?.totals.active || 0} />
+      <ProfileMetric icon={Archive} label="Archived" value={data?.totals.archived || 0} />
       <ProfileMetric icon={ShieldCheck} label="W-2" value={data?.totals.w2 || 0} />
-      <ProfileMetric icon={DollarSign} label="1099" value={data?.totals.contractors || 0} />
     </div>
 
     <Card>
@@ -198,9 +215,8 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
             <Input className="pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search name, ID, alias…" />
           </div>
           <select className="h-11 rounded-lg border bg-white px-3 text-sm" value={status} onChange={event => setStatus(event.target.value as typeof status)}>
-            <option value="all">All workers</option>
-            <option value="active">Active only</option>
-            <option value="inactive">Inactive only</option>
+            <option value="active">Active workers</option>
+            <option value="archived">Archived workers</option>
           </select>
           <Button onClick={addWorker}><Plus className="size-4" />Add worker</Button>
         </div>
@@ -214,7 +230,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
               <td><Badge variant={worker.worker_type === "W2" ? "warning" : "secondary"}>{worker.worker_type === "W2" ? "W-2" : "1099"}</Badge></td>
               <td className="font-semibold tabular-nums">${compactNumber(worker.daily_rate)}</td>
               <td className="max-w-64 truncate text-muted-foreground">{worker.aliases || "—"}</td>
-              <td><Badge variant={worker.active ? "success" : "secondary"}>{worker.active ? "Active" : "Inactive"}</Badge></td>
+              <td><Badge variant={worker.active ? "success" : "secondary"}>{worker.active ? "Active" : "Archived"}</Badge></td>
               <td><Button size="sm" variant="ghost"><Pencil className="size-4" />Edit</Button></td>
             </tr>)}</tbody>
           </table>
@@ -236,17 +252,21 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
           <label className="field-label">Worker type<select className="h-11 rounded-lg border bg-white px-3 text-sm" value={draft.worker_type} onChange={event => setDraft({ ...draft, worker_type: event.target.value as WorkerProfile["worker_type"] })}><option value="W2">W-2 employee</option><option value="1099">1099 contractor</option></select></label>
           <label className="field-label">Daily salary / rate<Input type="number" min="0" step=".01" value={draft.daily_rate} onChange={event => setDraft({ ...draft, daily_rate: Number(event.target.value) })} /></label>
           <label className="field-label">Display order<Input type="number" min="0" step="1" value={draft.display_order} onChange={event => setDraft({ ...draft, display_order: Number(event.target.value) })} /></label>
-          <label className="flex items-center gap-3 rounded-lg border p-3 text-sm font-semibold"><input className="size-4 accent-[#2563eb]" type="checkbox" checked={draft.active} onChange={event => setDraft({ ...draft, active: event.target.checked })} />Active worker</label>
+          <div className="flex items-center gap-3 rounded-lg border p-3 text-sm font-semibold"><Badge variant={draft.active ? "success" : "secondary"}>{draft.active ? "Active worker" : "Archived worker"}</Badge></div>
           <label className="field-label sm:col-span-2">Aliases<Input value={draft.aliases} onChange={event => setDraft({ ...draft, aliases: event.target.value })} placeholder="Separate alternate names with semicolons" /></label>
           <label className="field-label sm:col-span-2">Worker notes<Textarea value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} placeholder="Payment schedule, payment method, work status, or other worker-only notes" /></label>
         </div>
-        {draft.id > 0 && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
-          <div><strong className="block text-sm text-red-900">Remove this worker</strong><p className="mt-1 text-xs text-red-700">Workers with payroll history will be archived instead of permanently erased.</p></div>
-          <Button variant="danger" onClick={() => void remove()} disabled={saving || removing}><Trash2 className="size-4" />{removing ? "Removing…" : "Remove worker"}</Button>
+        {draft.id > 0 && draft.active && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div><strong className="block text-sm text-red-900">Archive this worker</strong><p className="mt-1 text-xs text-red-700">The worker disappears from all operational pages. Historical records remain available if the worker is restored later.</p></div>
+          <Button variant="danger" onClick={() => void remove()} disabled={saving || removing}><Archive className="size-4" />{removing ? "Archiving…" : "Archive worker"}</Button>
+        </div>}
+        {draft.id > 0 && !draft.active && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4">
+          <div><strong className="block text-sm text-sky-950">Restore this worker</strong><p className="mt-1 text-xs text-sky-800">The worker will return to entry, overview, payroll, and location pages.</p></div>
+          <Button onClick={() => void restore()} disabled={saving || restoring}><ArchiveRestore className="size-4" />{restoring ? "Restoring…" : "Restore worker"}</Button>
         </div>}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
-          <Button onClick={() => void save()} disabled={saving || removing}><Save className="size-4" />{saving ? "Saving…" : draft.worker_key ? "Save worker" : "Add worker"}</Button>
+          <Button onClick={() => void save()} disabled={saving || removing || restoring}><Save className="size-4" />{saving ? "Saving…" : draft.worker_key ? "Save worker" : "Add worker"}</Button>
         </div>
       </DialogContent>}
     </Dialog>

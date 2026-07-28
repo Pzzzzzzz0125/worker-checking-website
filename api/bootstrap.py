@@ -61,7 +61,6 @@ def build_bootstrap(base: LarkBase) -> dict:
         "cost_centers": cost_centers,
         "locations": [],
         "ai_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
-        "review_count": 0,
         "last_recorded_date": "",
         "workbook_year": date.today().year,
     }
@@ -75,7 +74,7 @@ def build_bootstrap_details(base: LarkBase) -> dict:
             base.records, "Location Entries", field_names=("Location",), cache_seconds=300,
         )
         days_future = executor.submit(
-            base.records, "Work Days", field_names=("Work Date", "Confidence"), cache_seconds=60,
+            base.records, "Work Days", field_names=("Work Date",), cache_seconds=60,
         )
         location_records = locations_future.result()
         work_days = days_future.result()
@@ -92,10 +91,6 @@ def build_bootstrap_details(base: LarkBase) -> dict:
     last_recorded = max(dates, default="")
     return {
         "locations": locations,
-        "review_count": sum(
-            text_value(field(record, "Confidence")).casefold() == "low"
-            for record in work_days
-        ),
         "last_recorded_date": last_recorded,
         "workbook_year": int(last_recorded[:4]) if last_recorded else date.today().year,
     }

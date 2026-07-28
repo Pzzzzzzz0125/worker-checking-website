@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -7,6 +8,7 @@ from api._lark import LarkAPIError
 from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
+    bool_value,
     date_range_filter,
     date_value,
     field,
@@ -25,26 +27,45 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
     # Overview intentionally reads only Work Days. Location and cost-center
     # allocations belong on their dedicated detail pages and were the largest
     # source of repeated Lark pagination here.
-    day_records = base.records(
-        "Work Days",
-        filter_formula=record_filter,
-        field_names=(
-            "Worker Key",
-            "Worker Name",
-            "Work Date",
-            "Status",
-            "Total Hours",
-            "Overtime Hours",
-            "Extra Pay",
-        ),
-        cache_seconds=120,
-    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        days_future = executor.submit(
+            base.records,
+            "Work Days",
+            filter_formula=record_filter,
+            field_names=(
+                "Worker Key",
+                "Worker Name",
+                "Work Date",
+                "Status",
+                "Total Hours",
+                "Overtime Hours",
+                "Extra Pay",
+            ),
+            cache_seconds=120,
+        )
+        workers_future = executor.submit(
+            base.records,
+            "Workers",
+            field_names=("Worker Key", "Active"),
+            cache_seconds=60,
+        )
+        day_records = days_future.result()
+        active_worker_keys = {
+            text_value(field(record, "Worker Key"))
+            for record in workers_future.result()
+            if bool_value(field(record, "Active"), True)
+        }
 
     records = []
     for record in day_records:
         work_date = date_value(field(record, "Work Date"))
         worker_key = text_value(field(record, "Worker Key"))
-        if not work_date or work_date < start or work_date > end:
+        if (
+            not work_date
+            or worker_key not in active_worker_keys
+            or work_date < start
+            or work_date > end
+        ):
             continue
         if selected_worker and worker_key != selected_worker:
             continue

@@ -68,7 +68,13 @@ class handler(BaseHTTPRequestHandler):
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)
             return
-        if self.action() in {"workers", "worker_delete", "workers_unlock", "payroll_unlock"}:
+        if self.action() in {
+            "workers",
+            "worker_delete",
+            "worker_restore",
+            "workers_unlock",
+            "payroll_unlock",
+        }:
             WorkersHandler.do_POST(self)
             return
         if self.action() != "payroll_check":

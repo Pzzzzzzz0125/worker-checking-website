@@ -1,10 +1,10 @@
-import { AlertTriangle, BrainCircuit, Building2, CalendarDays, CheckCircle2, ClipboardCheck, Download, LayoutDashboard, LoaderCircle, MapPin, Menu, Upload, UserRound, Users, X } from "lucide-react"
+import { AlertTriangle, BrainCircuit, CalendarDays, CheckCircle2, ClipboardCheck, Download, LayoutDashboard, LoaderCircle, MapPin, Menu, Upload, UserRound, Users, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import type { LarkSyncStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-export type View = "overview" | "payroll" | "locations" | "ai" | "daily" | "worker" | "workers" | "import" | "export" | "review"
+export type View = "overview" | "payroll" | "locations" | "ai" | "daily" | "worker" | "workers" | "import" | "export"
 const groups: { label: string; items: { id: View; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { label: "Check", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "locations", label: "Locations", icon: MapPin },
@@ -13,12 +13,12 @@ const groups: { label: string; items: { id: View; label: string; icon: typeof La
     { id: "ai", label: "AI reading", icon: BrainCircuit }, { id: "daily", label: "Daily entry", icon: CalendarDays }, { id: "worker", label: "Worker entry", icon: UserRound },
   ]},
   { label: "Data", items: [
-    { id: "workers", label: "Workers", icon: Users }, { id: "import", label: "Import", icon: Upload }, { id: "export", label: "Export", icon: Download }, { id: "review", label: "Needs review", icon: Building2 },
+    { id: "workers", label: "Workers", icon: Users }, { id: "import", label: "Import", icon: Upload }, { id: "export", label: "Export", icon: Download },
   ]},
 ]
 const allItems = groups.flatMap(g => g.items)
 
-export function AppShell({ view, setView, reviewCount, children }: { view: View; setView: (v: View) => void; reviewCount: number; children: React.ReactNode }) {
+export function AppShell({ view, setView, children }: { view: View; setView: (v: View) => void; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   const [sync, setSync] = useState<LarkSyncStatus | null>(null)
   useEffect(() => {
@@ -48,7 +48,7 @@ export function AppShell({ view, setView, reviewCount, children }: { view: View;
         {open && <Button variant="ghost" size="icon" className="ml-auto text-white" onClick={() => setOpen(false)}><X className="size-5" /></Button>}
       </div>
       <nav className="flex-1 overflow-y-auto">
-        {groups.map(group => <div key={group.label}><div className="nav-heading">{group.label}</div>{group.items.map(item => <button className={cn("nav-item", view === item.id && "active")} onClick={() => navigate(item.id)} key={item.id}><item.icon className="size-[17px]" /><span>{item.label}</span>{item.id === "review" && reviewCount > 0 && <b className="ml-auto rounded-full bg-amber-400 px-2 py-0.5 text-[10px] text-slate-900">{reviewCount}</b>}</button>)}</div>)}
+        {groups.map(group => <div key={group.label}><div className="nav-heading">{group.label}</div>{group.items.map(item => <button className={cn("nav-item", view === item.id && "active")} onClick={() => navigate(item.id)} key={item.id}><item.icon className="size-[17px]" /><span>{item.label}</span></button>)}</div>)}
       </nav>
       <p className="mt-4 px-2 text-[10px] text-[#7fa6d8]">Developed by Zihao (Paul) Zhao</p>
     </aside>

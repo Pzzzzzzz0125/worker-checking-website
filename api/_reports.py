@@ -73,14 +73,15 @@ def load_report_data(
     workers = {}
     for record in worker_records:
         key = text_value(field(record, "Worker Key"))
-        if key:
+        active = bool_value(field(record, "Active"), True)
+        if key and active:
             workers[key] = {
                 "id": int(float(key)) if key.replace(".", "", 1).isdigit() else 0,
                 "key": key,
                 "name": text_value(field(record, "Name")),
                 "worker_type": text_value(field(record, "Worker Type")) or "1099",
                 "daily_rate": number_value(field(record, "Daily Rate")),
-                "active": bool_value(field(record, "Active"), True),
+                "active": True,
             }
 
     locations_by_day: dict[str, list[dict]] = defaultdict(list)
@@ -117,7 +118,7 @@ def load_report_data(
     for record in day_records:
         worker_key = text_value(field(record, "Worker Key"))
         work_date = date_value(field(record, "Work Date"))
-        if not worker_key or not work_date:
+        if not worker_key or not work_date or worker_key not in workers:
             continue
         day_key = text_value(field(record, "Work Day Key"))
         locations = locations_by_day.get(day_key, [])

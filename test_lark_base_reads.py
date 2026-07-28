@@ -12,7 +12,8 @@ class FakeBase:
     def __init__(self):
         self.data = {
             "Workers": [
-                record("rec-worker", **{"Worker Key": "7", "Name": "Ana Diaz", "Active": True})
+                record("rec-worker", **{"Worker Key": "7", "Name": "Ana Diaz", "Active": True}),
+                record("rec-archived", **{"Worker Key": "8", "Name": "Archived Worker", "Active": False}),
             ],
             "Cost Centers": [
                 record(
@@ -51,7 +52,20 @@ class FakeBase:
                         "End Time": "18:30",
                         "Confidence": "low",
                     },
-                )
+                ),
+                record(
+                    "rec-archived-day",
+                    **{
+                        "Work Day Key": "8|2026-07-01",
+                        "Worker Key": "8",
+                        "Worker Name": "Archived Worker",
+                        "Work Date": "2026-07-01",
+                        "Status": "worked",
+                        "Total Hours": 8,
+                        "Overtime Hours": 0,
+                        "Extra Pay": 0,
+                    },
+                ),
             ],
         }
 
@@ -71,7 +85,6 @@ class LarkBaseReadTests(unittest.TestCase):
         self.assertEqual(result["locations"], [])
         details = build_bootstrap_details(FakeBase())
         self.assertEqual(details["locations"], ["444 Pocatello"])
-        self.assertEqual(details["review_count"], 1)
         self.assertEqual(details["last_recorded_date"], "2026-07-01")
 
     def test_summary_uses_compact_work_day_data(self):

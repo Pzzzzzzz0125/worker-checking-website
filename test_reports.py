@@ -2,12 +2,34 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from api._reports import california_overtime, pay_period
+from api._reports import california_overtime, load_report_data, pay_period
 from api.reports import handler as ReportRouter
 from report_handlers.location_detail import handler as LocationDetailHandler
 
 
 class ReportTests(unittest.TestCase):
+    def test_archived_workers_are_excluded_from_report_data(self):
+        class FakeBase:
+            def records(self, table_name, **kwargs):
+                del kwargs
+                if table_name == "Workers":
+                    return [
+                        {"fields": {"Worker Key": "1", "Name": "Active", "Active": True}},
+                        {"fields": {"Worker Key": "2", "Name": "Archived", "Active": False}},
+                    ]
+                if table_name == "Work Days":
+                    return [
+                        {"fields": {"Work Day Key": "1|2026-07-01", "Worker Key": "1", "Work Date": "2026-07-01", "Status": "worked", "Total Hours": 8}},
+                        {"fields": {"Work Day Key": "2|2026-07-01", "Worker Key": "2", "Work Date": "2026-07-01", "Status": "worked", "Total Hours": 8}},
+                    ]
+                return []
+
+        result = load_report_data(
+            FakeBase(), date(2026, 7, 1), date(2026, 7, 15),
+        )
+        self.assertEqual(set(result["workers"]), {"1"})
+        self.assertEqual([day["worker_key"] for day in result["days"]], ["1"])
+
     def test_location_detail_uses_payroll_access_gate(self):
         request = object.__new__(ReportRouter)
         with (

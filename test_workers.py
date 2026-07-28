@@ -10,6 +10,7 @@ from report_handlers.workers import (
     list_workers,
     payroll_access_status,
     remove_worker,
+    restore_worker,
     update_worker,
 )
 
@@ -172,11 +173,13 @@ class WorkerProfileTests(unittest.TestCase):
         self.assertEqual(created["display_order"], 3)
         self.assertEqual(base.saved[3]["Worker Key"], "8")
 
-    def test_remove_worker_without_history_deletes_master_record(self):
+    def test_remove_worker_without_history_archives_master_record(self):
         base = FakeBase()
         result = remove_worker(base, {"worker_key": "7"})
-        self.assertEqual(result["mode"], "deleted")
-        self.assertEqual(base.deleted, ["worker-7"])
+        self.assertEqual(result["mode"], "archived")
+        self.assertEqual(result["history_records"], 0)
+        self.assertFalse(base.saved[3]["Active"])
+        self.assertEqual(base.deleted, [])
 
     def test_remove_worker_with_history_archives_worker(self):
         base = FakeBase()
@@ -191,6 +194,13 @@ class WorkerProfileTests(unittest.TestCase):
         self.assertEqual(result["history_records"], 1)
         self.assertFalse(base.saved[3]["Active"])
         self.assertEqual(base.deleted, [])
+
+    def test_restore_worker_reactivates_archived_profile(self):
+        base = FakeBase()
+        result = restore_worker(base, {"worker_key": "2"})
+        self.assertTrue(result["restored"])
+        self.assertTrue(result["worker"]["active"])
+        self.assertTrue(base.saved[3]["Active"])
 
     def test_update_worker_rejects_unknown_classification(self):
         with self.assertRaisesRegex(ValueError, "W-2 or 1099"):

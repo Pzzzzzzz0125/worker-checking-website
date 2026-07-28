@@ -104,6 +104,10 @@
       "destination": "/api/reports?action=worker_delete"
     },
     {
+      "source": "/api/workers/restore",
+      "destination": "/api/reports?action=worker_restore"
+    },
+    {
       "source": "/",
       "destination": "/app-ui/index.html"
     }

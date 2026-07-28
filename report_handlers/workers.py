@@ -179,26 +179,34 @@ def remove_worker(base: LarkBase, body: dict) -> dict:
         cache_seconds=0,
     )
     history_records = len(work_history) + len(payroll_history)
-    if history_records:
-        profile = worker_profile(match)
-        profile["active"] = False
-        archived = update_worker(base, profile)
+    profile = worker_profile(match)
+    if not profile["active"]:
         return {
             "removed": True,
             "mode": "archived",
             "history_records": history_records,
-            "worker": archived,
+            "worker": profile,
         }
-    deleted = base.delete_record_ids(
-        "Workers",
-        [str(match.get("record_id") or "")],
-    )
+    profile["active"] = False
+    archived = update_worker(base, profile)
     return {
-        "removed": bool(deleted),
-        "mode": "deleted",
-        "history_records": 0,
-        "worker_key": key,
+        "removed": True,
+        "mode": "archived",
+        "history_records": history_records,
+        "worker": archived,
     }
+
+
+def restore_worker(base: LarkBase, body: dict) -> dict:
+    key = str(body.get("worker_key") or "").strip()
+    existing = {worker["worker_key"]: worker for worker in list_workers(base)}
+    worker = existing.get(key)
+    if not worker:
+        raise ValueError("Choose a valid archived worker.")
+    if worker["active"]:
+        return {"restored": True, "worker": worker}
+    worker["active"] = True
+    return {"restored": True, "worker": update_worker(base, worker)}
 
 
 def session(handler: BaseHTTPRequestHandler) -> dict | None:
@@ -313,9 +321,14 @@ class handler(BaseHTTPRequestHandler):
                     "totals": {
                         "workers": len(workers),
                         "active": sum(worker["active"] for worker in workers),
-                        "w2": sum(worker["worker_type"] == "W2" for worker in workers),
+                        "archived": sum(not worker["active"] for worker in workers),
+                        "w2": sum(
+                            worker["active"] and worker["worker_type"] == "W2"
+                            for worker in workers
+                        ),
                         "contractors": sum(
-                            worker["worker_type"] == "1099" for worker in workers
+                            worker["active"] and worker["worker_type"] == "1099"
+                            for worker in workers
                         ),
                     },
                 },
@@ -397,6 +410,9 @@ class handler(BaseHTTPRequestHandler):
             selected_action = action(self)
             if selected_action == "worker_delete":
                 json_response(self, remove_worker(base, body))
+                return
+            if selected_action == "worker_restore":
+                json_response(self, restore_worker(base, body))
                 return
             worker = (
                 update_worker(base, body)
