@@ -41,7 +41,11 @@ class handler(BaseHTTPRequestHandler):
         if selected is None:
             json_response(self, {"error": "Unknown report route."}, 404)
             return
-        if self.action() in {"payroll", "payroll_worker_detail"} and not require_payroll_access(self):
+        if self.action() in {
+            "payroll",
+            "payroll_worker_detail",
+            "location_detail",
+        } and not require_payroll_access(self):
             return
         selected.do_GET(self)
 

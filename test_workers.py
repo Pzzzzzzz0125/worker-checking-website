@@ -1,10 +1,14 @@
+import os
+import time
 import unittest
 from unittest.mock import patch
 
+from api._shared import sign_payload
 from report_handlers.workers import (
     access_status,
     create_worker,
     list_workers,
+    payroll_access_status,
     remove_worker,
     update_worker,
 )
@@ -96,6 +100,29 @@ class WorkerProfileTests(unittest.TestCase):
         self.assertTrue(result["authorized"])
         self.assertEqual(result["access_type"], "lark_admin")
         self.assertTrue(result["password_configured"])
+
+    def test_payroll_grant_also_authorizes_location_cost_access(self):
+        environment = {
+            "SESSION_SECRET": "test-session-secret-that-is-long-enough",
+            "PAYROLL_PASSWORD": "shared-sensitive-report-password",
+            "LARK_ADMIN_OPEN_IDS": "",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            grant = sign_payload(
+                {
+                    "sub": "ou-supervisor",
+                    "scope": "payroll-check",
+                    "iat": int(time.time()),
+                }
+            )
+            request = type(
+                "Request",
+                (),
+                {"headers": {"cookie": f"payroll_access_session={grant}"}},
+            )()
+            access = payroll_access_status(request, {"sub": "ou-supervisor"})
+        self.assertTrue(access["authorized"])
+        self.assertEqual(access["access_type"], "password")
 
     def test_list_workers_returns_full_master_profiles(self):
         base = FakeBase()

@@ -38,17 +38,25 @@ def _location_groups(location_fields: list[dict]) -> list[dict]:
                 "end": end,
                 "regular": 0.0,
                 "overtime": 0.0,
+                "hours": 0.0,
                 "centers": defaultdict(float),
             },
         )
         regular = number_value(fields.get("Regular Hours"))
         overtime = number_value(fields.get("Overtime Hours"))
+        stored_hours = fields.get("Location Hours")
+        location_hours = (
+            number_value(stored_hours)
+            if stored_hours not in (None, "")
+            else regular + overtime
+        )
         group["regular"] += regular
         group["overtime"] += overtime
+        group["hours"] += location_hours
         center_id = _safe_text(fields.get("Cost Center ID"))
         center_name = _safe_text(fields.get("Cost Center Name"))
         if center_id or center_name:
-            group["centers"][(center_id, center_name)] += regular + overtime
+            group["centers"][(center_id, center_name)] += location_hours
     return sorted(
         groups.values(),
         key=lambda item: (item["order"], item["name"].casefold(), item["start"]),
@@ -68,7 +76,7 @@ def format_normalized_entry(day: dict, locations: list[dict]) -> str:
     for location in _location_groups(locations):
         regular = round(location["regular"], 2)
         overtime = round(location["overtime"], 2)
-        total = round(regular + overtime, 2)
+        total = round(location["hours"], 2)
         time_text = (
             f"{location['start']}-{location['end']}"
             if location["start"] and location["end"]
@@ -112,6 +120,7 @@ def work_log_row(day: dict, locations: list[dict]) -> dict:
     grouped = _location_groups(locations)
     overtime = round(number_value(day.get("Overtime Hours")), 2)
     total = round(number_value(day.get("Total Hours")), 2)
+    location_total = round(number_value(day.get("Location Hours Sum"), total), 2)
     location_names = []
     centers: set[tuple[str, str]] = set()
     for location in grouped:
@@ -126,8 +135,19 @@ def work_log_row(day: dict, locations: list[dict]) -> dict:
         "Status": _safe_text(day.get("Status")) or "worked",
         "Normalized Entry": format_normalized_entry(day, locations),
         "Total Hours": total,
+        "Location Hours Sum": location_total,
+        "Hours Difference": round(
+            number_value(day.get("Hours Difference"), total - location_total),
+            2,
+        ),
         "Regular Hours": round(max(total - overtime, 0), 2),
         "Overtime Hours": overtime,
+        "Calculated Overtime Hours": round(
+            number_value(day.get("Calculated Overtime Hours"), max(total - 8, 0)),
+            2,
+        ),
+        "Override Reason": _safe_text(day.get("Override Reason")),
+        "Override By": _safe_text(day.get("Override By")),
         "Extra Pay": round(number_value(day.get("Extra Pay")), 2),
         "Locations": "; ".join(location_names),
         "Cost Centers": "; ".join(

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Copy, Plus, Save, Search, Trash2, Users, X } from "lucide-react"
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Copy, Plus, RotateCcw, Save, Search, Trash2, Users, X } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,24 +11,242 @@ import { api, postJSON } from "@/lib/api"
 import type { Bootstrap, WorkLocation, WorkRecord, Worker } from "@/lib/types"
 import { compactNumber, displayDate, initials, localISO } from "@/lib/utils"
 
-type Editable = WorkRecord & { dirty: boolean; existing: boolean; expanded?: boolean }
+type HourSource = "calculated" | "manual"
+type Editable = WorkRecord & {
+  dirty: boolean
+  existing: boolean
+  expanded?: boolean
+  total_hours_source: HourSource
+  overtime_source: HourSource
+  override_reason: string
+}
 type WorkerPeriod = "month" | "1" | "2"
 const blankLocation = (): WorkLocation => ({ name: "", hours: 8, start_time: "08:30", end_time: "16:30", cost_centers: [] })
-const normalize = (raw: any, date: string): Editable => ({ worker_id: raw.worker_id, worker_name: raw.worker_name, work_date: raw.work_date || date, status: raw.status || "worked", total_hours: raw.total_hours ?? 8, overtime_hours: raw.overtime_hours ?? Math.max(0, Number(raw.total_hours ?? 8)-8), extra_pay: raw.extra_pay || 0, start_time: "", end_time: "", notes: raw.notes || "", locations: raw.locations?.length ? raw.locations.map((l:any)=>({...l,start_time:l.start_time||"",end_time:l.end_time||"",hours:rangeHours(l.start_time||"",l.end_time||"")??l.hours??null,cost_centers:l.cost_centers||[]})) : [blankLocation()], cost_centers: raw.cost_centers || [], dirty: false, existing: !!raw.day_id || !!raw.id })
+
+const roundHours = (value: number) => Math.round(value * 100) / 100
+function locationHoursSum(locations: WorkLocation[]) {
+  return roundHours(locations.reduce((sum, location) => {
+    const hours = Number(location.hours)
+    return sum + (Number.isFinite(hours) && hours >= 0 ? hours : 0)
+  }, 0))
+}
+function normalize(raw: any, date: string): Editable {
+  const locations: WorkLocation[] = raw.locations?.length
+    ? raw.locations.map((location: any) => ({
+        ...location,
+        start_time: location.start_time || "",
+        end_time: location.end_time || "",
+        hours: location.hours ?? rangeHours(location.start_time || "", location.end_time || ""),
+        cost_centers: location.cost_centers || [],
+      }))
+    : [blankLocation()]
+  const locationSum = locationHoursSum(locations)
+  const total = Number(raw.total_hours ?? (locationSum || 8))
+  const calculatedOvertime = Math.max(total - 8, 0)
+  const recordedOvertime = Number(raw.overtime_hours ?? calculatedOvertime)
+  const inferredTotalSource: HourSource = Math.abs(total - locationSum) > 0.01 ? "manual" : "calculated"
+  const inferredOvertimeSource: HourSource = Math.abs(recordedOvertime - calculatedOvertime) > 0.01 ? "manual" : "calculated"
+  return {
+    worker_id: raw.worker_id,
+    worker_name: raw.worker_name,
+    work_date: raw.work_date || date,
+    status: raw.status || "worked",
+    total_hours: total,
+    overtime_hours: recordedOvertime,
+    location_hours_sum: Number(raw.location_hours_sum ?? locationSum),
+    total_hours_source: raw.total_hours_source === "manual" ? "manual" : raw.total_hours_source === "calculated" ? "calculated" : inferredTotalSource,
+    hours_difference: Number(raw.hours_difference ?? roundHours(total - locationSum)),
+    calculated_overtime_hours: Number(raw.calculated_overtime_hours ?? calculatedOvertime),
+    overtime_source: raw.overtime_source === "manual" ? "manual" : raw.overtime_source === "calculated" ? "calculated" : inferredOvertimeSource,
+    override_reason: raw.override_reason || "",
+    extra_pay: raw.extra_pay || 0,
+    start_time: "",
+    end_time: "",
+    notes: raw.notes || "",
+    locations,
+    cost_centers: raw.cost_centers || [],
+    dirty: false,
+    existing: !!raw.day_id || !!raw.id,
+  }
+}
 const clearedRecord = (record: Editable): Editable => ({...normalize({worker_id:record.worker_id,worker_name:record.worker_name,work_date:record.work_date,status:"worked",total_hours:8,overtime_hours:0,extra_pay:0,locations:[]},record.work_date),expanded:record.expanded})
 function minutes(value:string){const [hour,minute]=value.split(":").map(Number);return hour*60+minute}
-function timeFromMinutes(value:number){const rounded=Math.round(value);if(rounded<0||rounded>23*60+59)return "";return `${String(Math.floor(rounded/60)).padStart(2,"0")}:${String(rounded%60).padStart(2,"0")}`}
-function fitLastLocationToTotal(locations:WorkLocation[],total:number){const rows=locations.map(row=>({...row}));if(!rows.length)return rows;const lastIndex=rows.length-1,last=rows[lastIndex];if(!last.start_time)return rows;let prior=0;for(const row of rows.slice(0,lastIndex)){const hours=rangeHours(row.start_time,row.end_time);if(hours===null)return rows;prior+=hours}const remaining=total-prior;if(remaining<=0)return rows;const end=timeFromMinutes(minutes(last.start_time)+remaining*60);if(!end)return rows;last.end_time=end;last.hours=rangeHours(last.start_time,end);return rows}
-function timeResult(locations:WorkLocation[]){const rows=locations.filter(x=>x.name.trim()||x.start_time||x.end_time||x.hours!==null);const entered=rows.filter(x=>x.start_time||x.end_time);if(!entered.length)return {total:null as number|null,error:""};if(entered.length!==rows.length||entered.some(x=>!x.start_time||!x.end_time))return {total:null,error:"Time conflict: enter both Start and End for every location, or leave all location times blank."};const ranges=rows.map((x,index)=>({name:x.name.trim()||`Location ${index+1}`,start:minutes(x.start_time),end:minutes(x.end_time)}));const invalid=ranges.find(x=>x.end<=x.start);if(invalid)return {total:null,error:`Time conflict: ${invalid.name} must end after it starts.`};const sorted=[...ranges].sort((a,b)=>a.start-b.start);for(let i=1;i<sorted.length;i++)if(sorted[i].start<sorted[i-1].end)return {total:null,error:`Time conflict: ${sorted[i-1].name} overlaps ${sorted[i].name}.`};return {total:Math.round(ranges.reduce((sum,x)=>sum+(x.end-x.start)/60,0)*100)/100,error:""}}
-function payload(r: Editable) { const locations=cleanLocations(r.locations); return { worker_id:r.worker_id,status:r.status,total_hours:r.status==="worked"?Number(r.total_hours??8):0,overtime_hours:r.status==="worked"?Number(r.overtime_hours||0):0,extra_pay:r.status==="worked"?Number(r.extra_pay||0):0,start_time:"",end_time:"",locations:r.status==="worked"?locations:[],cost_centers:r.status==="worked"?Array.from(new Map(locations.flatMap(l=>l.cost_centers).map(c=>[c.id,c])).values()):[],notes:r.notes||""} }
-function validate(r:Editable){const locations=cleanLocations(r.locations);if(r.status==="worked"&&!locations.length)return "Add at least one location.";const missingCenter=locations.find(x=>!x.cost_centers.length);if(r.status==="worked"&&missingCenter)return `Choose a cost center for ${missingCenter.name}.`;if(r.status!=="worked")return "";const timing=timeResult(locations);if(timing.error)return timing.error;const total=Number(r.total_hours??8),overtime=Number(r.overtime_hours||0);if(timing.total!==null&&Math.abs(timing.total-total)>.01)return `Time conflict: location ranges total ${compactNumber(timing.total)}h, but Total hours is ${compactNumber(total)}h.`;const expected=Math.max(total-8,0);if(Math.abs(expected-overtime)>.01)return `Time conflict: ${compactNumber(total)} total hours requires ${compactNumber(expected)} overtime hours, not ${compactNumber(overtime)}h.`;return ""}
+function timeResult(locations:WorkLocation[]){
+  const rows=locations.filter(x=>x.name.trim()||x.start_time||x.end_time||x.hours!==null)
+  const entered=rows.filter(x=>x.start_time||x.end_time)
+  if(!entered.length)return {error:""}
+  if(entered.length!==rows.length||entered.some(x=>!x.start_time||!x.end_time))return {error:"Time conflict: enter both Start and End for every location, or leave all location times blank."}
+  const ranges=rows.map((x,index)=>({name:x.name.trim()||`Location ${index+1}`,start:minutes(x.start_time),end:minutes(x.end_time),hours:x.hours}))
+  const invalid=ranges.find(x=>x.end<=x.start)
+  if(invalid)return {error:`Time conflict: ${invalid.name} must end after it starts.`}
+  const mismatched=ranges.find(x=>x.hours!==null&&Math.abs((x.end-x.start)/60-Number(x.hours))>.01)
+  if(mismatched)return {error:`Time conflict: ${mismatched.name}'s time range does not match its Location hours.`}
+  const sorted=[...ranges].sort((a,b)=>a.start-b.start)
+  for(let i=1;i<sorted.length;i++)if(sorted[i].start<sorted[i-1].end)return {error:`Time conflict: ${sorted[i-1].name} overlaps ${sorted[i].name}.`}
+  return {error:""}
+}
+function payload(r: Editable) {
+  const locations=cleanLocations(r.locations)
+  return {
+    worker_id:r.worker_id,
+    status:r.status,
+    total_hours:r.status==="worked"?Number(r.total_hours??8):0,
+    overtime_hours:r.status==="worked"?Number(r.overtime_hours||0):0,
+    location_hours_sum:r.status==="worked"?locationHoursSum(locations):0,
+    total_hours_source:r.status==="worked"?r.total_hours_source:"calculated",
+    hours_difference:r.status==="worked"?roundHours(Number(r.total_hours)-locationHoursSum(locations)):0,
+    calculated_overtime_hours:r.status==="worked"?Math.max(Number(r.total_hours)-8,0):0,
+    overtime_source:r.status==="worked"?r.overtime_source:"calculated",
+    override_reason:r.status==="worked"?r.override_reason:"",
+    extra_pay:r.status==="worked"?Number(r.extra_pay||0):0,
+    start_time:"",
+    end_time:"",
+    locations:r.status==="worked"?locations:[],
+    cost_centers:r.status==="worked"?Array.from(new Map(locations.flatMap(l=>l.cost_centers).map(c=>[c.id,c])).values()):[],
+    notes:r.notes||"",
+  }
+}
+function validate(r:Editable){
+  const locations=cleanLocations(r.locations)
+  if(r.status==="worked"&&!locations.length)return "Add at least one location."
+  const missingCenter=locations.find(x=>!x.cost_centers.length)
+  if(r.status==="worked"&&missingCenter)return `Choose a cost center for ${missingCenter.name}.`
+  if(r.status!=="worked")return ""
+  const invalidHours=locations.find(x=>x.hours===null||!Number.isFinite(Number(x.hours))||Number(x.hours)<0||Number(x.hours)>24)
+  if(invalidHours)return `Enter valid Location hours for ${invalidHours.name}.`
+  const timing=timeResult(locations)
+  if(timing.error)return timing.error
+  const locationSum=locationHoursSum(locations),total=Number(r.total_hours??8),overtime=Number(r.overtime_hours||0)
+  if(!Number.isFinite(total)||total<0||total>24)return "Total hours must be between 0 and 24."
+  if(!Number.isFinite(overtime)||overtime<0||overtime>total)return "Overtime must be between 0 and Total hours."
+  const totalMismatch=Math.abs(locationSum-total)>.01
+  const expected=Math.max(total-8,0)
+  const overtimeMismatch=Math.abs(expected-overtime)>.01
+  if(r.total_hours_source!=="manual"&&totalMismatch)return "Calculated Total hours must match the Location hours sum."
+  if(r.overtime_source!=="manual"&&overtimeMismatch)return "Calculated Overtime must match Total hours."
+  if((totalMismatch||overtimeMismatch)&&!r.override_reason.trim())return "Enter an override reason before saving mismatched Total or Overtime hours."
+  return ""
+}
 function cellText(r:Editable){if(r.status==="off")return "off";const loc=cleanLocations(r.locations).map(l=>`${l.name}${l.hours==null?"":`(${compactNumber(l.hours)})`}`).join(";");const ot=Number(r.overtime_hours||Math.max(0,Number(r.total_hours)-8));return `${loc}${ot?`, ot ${compactNumber(ot)}h`:""}${Number(r.extra_pay)?`, ex $${compactNumber(r.extra_pay)}`:""}`||"—"}
 function moveMonth(value:string,delta:number){const [year,month]=value.split("-").map(Number);const next=new Date(year,month-1+delta,1);return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}`}
 function workerPeriodLabel(period:WorkerPeriod){return period==="month"?"Full month":period==="1"?"1–15":"16–end"}
 function inWorkerPeriod(workDate:string,period:WorkerPeriod){const day=Number(workDate.slice(8,10));return period==="month"||period==="1"&&day<=15||period==="2"&&day>=16}
+function workedPatch(record:Editable, expanded=false):Partial<Editable>{
+  if(record.status==="worked")return {status:"worked",expanded:expanded||record.expanded}
+  const locations=record.locations.length?record.locations:[blankLocation()]
+  const total=locationHoursSum(locations)||8
+  const overtime=Math.max(total-8,0)
+  return {
+    status:"worked",
+    locations,
+    expanded:expanded||record.expanded,
+    location_hours_sum:total,
+    total_hours:total,
+    total_hours_source:"calculated",
+    hours_difference:0,
+    calculated_overtime_hours:overtime,
+    overtime_hours:overtime,
+    overtime_source:"calculated",
+    override_reason:"",
+  }
+}
+function offPatch():Partial<Editable>{
+  return {
+    status:"off",
+    total_hours:0,
+    location_hours_sum:0,
+    total_hours_source:"calculated",
+    hours_difference:0,
+    calculated_overtime_hours:0,
+    overtime_hours:0,
+    overtime_source:"calculated",
+    override_reason:"",
+  }
+}
 
 function RecordEditor({ record, update, bootstrap }: { record: Editable; update: (patch: Partial<Editable>)=>void; bootstrap: Bootstrap }) {
- const worked=record.status==="worked";const changeLocations=(locations:WorkLocation[])=>{const timing=timeResult(locations);update(timing.total===null||timing.error?{locations}:{locations,total_hours:timing.total,overtime_hours:Math.max(timing.total-8,0)})};const changeTotal=(total:number)=>update({locations:fitLastLocationToTotal(record.locations,total),total_hours:total,overtime_hours:Math.max(total-8,0)});const changeOvertime=(overtime:number)=>{const total=overtime>0?8+overtime:Math.min(Number(record.total_hours??8),8);update({locations:fitLastLocationToTotal(record.locations,total),total_hours:total,overtime_hours:overtime})};return <div className="mt-4 grid gap-4 border-t pt-4"><LocationEditor value={record.locations} onChange={changeLocations} suggestions={bootstrap.locations} costCenters={bootstrap.cost_centers} disabled={!worked}/><div className="entry-grid"><label className="field-label">Total hours<Input type="number" min="0" max="24" step=".5" disabled={!worked} value={record.total_hours} onChange={e=>changeTotal(Number(e.target.value))}/></label><label className="field-label">Overtime hours<Input type="number" min="0" max="16" step=".5" disabled={!worked} value={record.overtime_hours||0} onChange={e=>changeOvertime(Number(e.target.value))}/></label><label className="field-label">Extra pay<Input type="number" min="0" step="1" disabled={!worked} value={record.extra_pay} onChange={e=>update({extra_pay:Number(e.target.value)})}/></label></div><p className="text-xs text-muted-foreground">The first location defaults to 08:30–16:30. New locations continue from the previous End and fill the remaining time to 8 hours. Location times, Total Hours, and Overtime Hours stay synchronized; changing either hour total adjusts the last location's End. Conflicts are blocked when saved.</p><label className="field-label">Notes<Input disabled={!worked} value={record.notes} onChange={e=>update({notes:e.target.value})} placeholder="Optional"/></label><div className="flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs text-white"><span className="text-slate-400">Normalized cell</span><code className="overflow-hidden text-ellipsis">{cellText(record)}</code></div></div>
+ const worked=record.status==="worked"
+ const locationSum=locationHoursSum(record.locations)
+ const total=Number(record.total_hours||0)
+ const overtime=Number(record.overtime_hours||0)
+ const calculatedOvertime=Math.max(total-8,0)
+ const totalMismatch=Math.abs(total-locationSum)>.01
+ const overtimeMismatch=Math.abs(overtime-calculatedOvertime)>.01
+ const changeLocations=(locations:WorkLocation[])=>{
+   const nextSum=locationHoursSum(locations)
+   if(record.total_hours_source==="manual"){
+     const nextCalculatedOvertime=Math.max(total-8,0)
+     update({
+       locations,
+       location_hours_sum:nextSum,
+       hours_difference:roundHours(total-nextSum),
+       calculated_overtime_hours:nextCalculatedOvertime,
+       overtime_hours:record.overtime_source==="manual"?overtime:nextCalculatedOvertime,
+     })
+     return
+   }
+   const nextOvertime=Math.max(nextSum-8,0)
+   update({
+     locations,
+     location_hours_sum:nextSum,
+     total_hours:nextSum,
+     total_hours_source:"calculated",
+     hours_difference:0,
+     calculated_overtime_hours:nextOvertime,
+     overtime_hours:record.overtime_source==="manual"?overtime:nextOvertime,
+   })
+ }
+ const changeTotal=(nextTotal:number)=>{
+   const source:HourSource=Math.abs(nextTotal-locationSum)>.01?"manual":"calculated"
+   const nextOvertime=Math.max(nextTotal-8,0)
+   update({
+     total_hours:nextTotal,
+     total_hours_source:source,
+     hours_difference:roundHours(nextTotal-locationSum),
+     calculated_overtime_hours:nextOvertime,
+     overtime_hours:nextOvertime,
+     overtime_source:"calculated",
+   })
+ }
+ const changeOvertime=(nextOvertime:number)=>update({
+   overtime_hours:nextOvertime,
+   calculated_overtime_hours:calculatedOvertime,
+   overtime_source:Math.abs(nextOvertime-calculatedOvertime)>.01?"manual":"calculated",
+ })
+ const resetTotal=()=>{
+   const nextOvertime=Math.max(locationSum-8,0)
+   update({
+     total_hours:locationSum,
+     total_hours_source:"calculated",
+     hours_difference:0,
+     calculated_overtime_hours:nextOvertime,
+     overtime_hours:nextOvertime,
+     overtime_source:"calculated",
+     override_reason:"",
+   })
+ }
+ const resetOvertime=()=>update({overtime_hours:calculatedOvertime,overtime_source:"calculated"})
+ return <div className="mt-4 grid gap-4 border-t pt-4">
+   <LocationEditor value={record.locations} onChange={changeLocations} suggestions={bootstrap.locations} costCenters={bootstrap.cost_centers} disabled={!worked}/>
+   <div className="grid gap-3 rounded-xl border bg-slate-50 p-3 sm:grid-cols-3">
+     <div><span className="text-xs font-semibold text-muted-foreground">Location hours sum</span><strong className="mt-1 block text-lg">{compactNumber(locationSum)}h</strong></div>
+     <div><span className="text-xs font-semibold text-muted-foreground">Regular hours</span><strong className="mt-1 block text-lg">{compactNumber(Math.max(total-overtime,0))}h</strong></div>
+     <div><span className="text-xs font-semibold text-muted-foreground">Calculated overtime</span><strong className="mt-1 block text-lg">{compactNumber(calculatedOvertime)}h</strong></div>
+   </div>
+   <div className="entry-grid">
+     <label className="field-label">Total hours <Badge variant={record.total_hours_source==="manual"?"warning":"secondary"}>{record.total_hours_source==="manual"?"Manual override":"Auto"}</Badge><Input type="number" min="0" max="24" step=".5" disabled={!worked} value={record.total_hours} onChange={e=>changeTotal(Number(e.target.value))}/></label>
+     <label className="field-label">Overtime hours <Badge variant={record.overtime_source==="manual"?"warning":"secondary"}>{record.overtime_source==="manual"?"Manual override":"Auto"}</Badge><Input type="number" min="0" max="24" step=".5" disabled={!worked} value={record.overtime_hours||0} onChange={e=>changeOvertime(Number(e.target.value))}/></label>
+     <label className="field-label">Extra pay<Input type="number" min="0" step="1" disabled={!worked} value={record.extra_pay} onChange={e=>update({extra_pay:Number(e.target.value)})}/></label>
+   </div>
+   {(totalMismatch||overtimeMismatch)&&<div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+     <div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0"/><div className="flex-1">{totalMismatch&&<p>Location hours add up to {compactNumber(locationSum)}h, but Total Hours is {compactNumber(total)}h. Difference: {total>locationSum?"+":""}{compactNumber(total-locationSum)}h.</p>}{overtimeMismatch&&<p>Calculated overtime is {compactNumber(calculatedOvertime)}h, but recorded Overtime is {compactNumber(overtime)}h.</p>}</div></div>
+     <div className="mt-3 flex flex-wrap gap-2">{totalMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetTotal}><RotateCcw className="size-4"/>Reset to location sum</Button>}{overtimeMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetOvertime}><RotateCcw className="size-4"/>Reset overtime</Button>}</div>
+     <label className="field-label mt-3">Override reason<Input value={record.override_reason} onChange={e=>update({override_reason:e.target.value})} placeholder="Required to save a mismatch, e.g. Supervisor confirmed"/></label>
+   </div>}
+   <p className="text-xs text-muted-foreground">Location hours are the normal source of truth: changing a location recalculates Total and Overtime. Editing Total or Overtime creates a manual override without silently changing location allocations. Time ranges must still match each location's hours.</p>
+   <label className="field-label">Notes<Input disabled={!worked} value={record.notes} onChange={e=>update({notes:e.target.value})} placeholder="Optional"/></label>
+   <div className="flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs text-white"><span className="text-slate-400">Normalized cell</span><code className="overflow-hidden text-ellipsis">{cellText(record)}</code></div>
+ </div>
 }
 
 export function DailyEntryView({ bootstrap }: { bootstrap: Bootstrap }) {
@@ -40,7 +258,7 @@ export function DailyEntryView({ bootstrap }: { bootstrap: Bootstrap }) {
  const visible=records.filter(r=>r.worker_name?.toLowerCase().includes(search.toLowerCase()));const dirty=records.filter(r=>r.dirty)
  return <div className="page"><div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><h1 className="page-title">Daily entry</h1><p className="page-subtitle">Choose one day, then update every worker who worked that day.</p></div><div className="flex w-full gap-2 sm:w-auto"><Button variant="outline" size="icon" className="shrink-0" onClick={()=>{const d=new Date(`${date}T12:00`);d.setDate(d.getDate()-1);setDate(localISO(d))}}><ChevronLeft className="size-4"/></Button><Input className="min-w-0 flex-1 sm:w-40" type="date" value={date} onChange={e=>setDate(e.target.value)}/><Button variant="outline" size="icon" className="shrink-0" onClick={()=>{const d=new Date(`${date}T12:00`);d.setDate(d.getDate()+1);setDate(localISO(d))}}><ChevronRight className="size-4"/></Button></div></div>
  <div className="metric-grid mb-5"><Mini label="Worked" value={records.filter(r=>r.status==="worked").length}/><Mini label="Off" value={records.filter(r=>r.status==="off").length}/><Mini label="Hours" value={compactNumber(records.filter(r=>r.status==="worked").reduce((a,r)=>a+Number(r.total_hours),0))}/><Mini label="Unsaved" value={dirty.length}/></div>
- <Card><CardHeader className="!flex-col justify-between sm:!flex-row sm:items-center"><div><CardTitle>Workers for {displayDate(date,true)}</CardTitle><CardDescription>Drafts are kept in this browser until saved.</CardDescription></div><div className="relative w-full sm:max-w-xs"><Search className="absolute left-3 top-3 size-4 text-muted-foreground"/><Input className="pl-9" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Find worker…"/></div></CardHeader><CardContent className="grid gap-3">{visible.map(r=><Card className={r.dirty?"border-amber-300":"shadow-none"} key={r.worker_id}><div className="p-4"><div className="flex flex-wrap items-center gap-3"><span className="avatar">{initials(r.worker_name)}</span><strong className="mr-auto">{r.worker_name}</strong><div className="flex rounded-lg bg-muted p-1"><Button size="sm" variant={r.status==="worked"?"default":"ghost"} onClick={()=>setRow(r.worker_id,{status:"worked",total_hours:r.total_hours||8})}>Worked</Button><Button size="sm" variant={r.status==="off"?"default":"ghost"} onClick={()=>setRow(r.worker_id,{status:"off",total_hours:0})}>Off</Button></div><Button size="sm" variant="ghost" onClick={()=>{setCopied(structuredClone(r));toast.success(`Copied ${r.worker_name}`)}}><Copy className="size-4"/>Copy</Button><Button size="sm" variant="ghost" disabled={!copied} onClick={()=>copied&&setRow(r.worker_id,{...structuredClone(copied),worker_id:r.worker_id,worker_name:r.worker_name,dirty:true})}><Clipboard className="size-4"/>Paste</Button><Button size="sm" disabled={!r.dirty} onClick={()=>save([r])}><Save className="size-4"/>Save</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={()=>void clearRecord(r)}><Trash2 className="size-4"/>Clear record</Button><Button variant="ghost" size="icon" onClick={()=>setRow(r.worker_id,{expanded:!r.expanded})}><ChevronDown className={`size-4 transition ${r.expanded?"rotate-180":""}`}/></Button></div>{r.expanded&&<RecordEditor record={r} bootstrap={bootstrap} update={p=>setRow(r.worker_id,p)}/>}</div></Card>)}</CardContent></Card>
+ <Card><CardHeader className="!flex-col justify-between sm:!flex-row sm:items-center"><div><CardTitle>Workers for {displayDate(date,true)}</CardTitle><CardDescription>Drafts are kept in this browser until saved.</CardDescription></div><div className="relative w-full sm:max-w-xs"><Search className="absolute left-3 top-3 size-4 text-muted-foreground"/><Input className="pl-9" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Find worker…"/></div></CardHeader><CardContent className="grid gap-3">{visible.map(r=><Card className={r.dirty?"border-amber-300":"shadow-none"} key={r.worker_id}><div className="p-4"><div className="flex flex-wrap items-center gap-3"><span className="avatar">{initials(r.worker_name)}</span><strong className="mr-auto">{r.worker_name}</strong><div className="flex rounded-lg bg-muted p-1"><Button size="sm" variant={r.status==="worked"?"default":"ghost"} onClick={()=>setRow(r.worker_id,workedPatch(r))}>Worked</Button><Button size="sm" variant={r.status==="off"?"default":"ghost"} onClick={()=>setRow(r.worker_id,offPatch())}>Off</Button></div><Button size="sm" variant="ghost" onClick={()=>{setCopied(structuredClone(r));toast.success(`Copied ${r.worker_name}`)}}><Copy className="size-4"/>Copy</Button><Button size="sm" variant="ghost" disabled={!copied} onClick={()=>copied&&setRow(r.worker_id,{...structuredClone(copied),worker_id:r.worker_id,worker_name:r.worker_name,dirty:true})}><Clipboard className="size-4"/>Paste</Button><Button size="sm" disabled={!r.dirty} onClick={()=>save([r])}><Save className="size-4"/>Save</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={()=>void clearRecord(r)}><Trash2 className="size-4"/>Clear record</Button><Button variant="ghost" size="icon" onClick={()=>setRow(r.worker_id,{expanded:!r.expanded})}><ChevronDown className={`size-4 transition ${r.expanded?"rotate-180":""}`}/></Button></div>{r.expanded&&<RecordEditor record={r} bootstrap={bootstrap} update={p=>setRow(r.worker_id,p)}/>}</div></Card>)}</CardContent></Card>
  {dirty.length>0&&<div className="fixed bottom-20 right-5 z-40 flex items-center gap-4 rounded-2xl border bg-white p-3 pl-5 shadow-xl md:bottom-6"><span className="text-sm"><strong>{dirty.length}</strong> unsaved · draft protected</span><Button onClick={()=>save(dirty)}><Save className="size-4"/>Save all</Button></div>}</div>
 }
 function Mini({label,value}:{label:string;value:string|number}){return <Card><CardContent className="!pt-5"><p className="text-xs font-semibold text-muted-foreground">{label}</p><strong className="mt-1 block text-2xl">{value}</strong></CardContent></Card>}
@@ -56,6 +274,6 @@ export function WorkerEntryView({ bootstrap }: { bootstrap: Bootstrap }) {
  const allSelected=!!periodDays.length&&selected.size===periodDays.length;const toggleAll=()=>setSelected(allSelected?new Set():new Set<string>(periodDays.map((r:Editable)=>r.work_date)))
  const copyTargets=bootstrap.workers.filter(w=>w.id!==data?.worker.id&&w.name.toLowerCase().includes(targetSearch.trim().toLowerCase()))
  return <div className="page"><div className="mb-6"><h1 className="page-title">Worker entry</h1><p className="page-subtitle">Choose one worker and record multiple days in a month.</p></div><Card className="mb-5"><CardContent className="flex flex-wrap items-end gap-3 !pt-5"><label className="field-label min-w-64 flex-1">Worker<Input list="workers" value={workerName} onChange={e=>setWorkerName(e.target.value)} placeholder="Search worker name"/></label><div className="flex items-end gap-2"><Button variant="outline" size="icon" onClick={()=>setMonth(value=>moveMonth(value,-1))}><ChevronLeft className="size-4"/></Button><label className="field-label">Month<Input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><Button variant="outline" size="icon" onClick={()=>setMonth(value=>moveMonth(value,1))}><ChevronRight className="size-4"/></Button></div><div className="flex rounded-xl bg-muted p-1">{(["month","1","2"] as WorkerPeriod[]).map(value=><Button key={value} size="sm" variant={period===value?"default":"ghost"} onClick={()=>setPeriod(value)}>{workerPeriodLabel(value)}</Button>)}</div><Button onClick={load}><Search className="size-4"/>Load</Button></CardContent></Card>
- {!data?<Card><CardContent className="py-16 text-center"><Users className="mx-auto mb-3 size-10 text-primary"/><h3 className="font-bold">Select a worker to begin</h3><p className="mt-1 text-sm text-muted-foreground">Choose full month, 1–15, or 16–end before loading.</p></CardContent></Card>:<><div className="mb-4 flex flex-wrap items-center gap-2"><strong className="mr-auto">{data.worker.name} · {data.month} · {workerPeriodLabel(period)}</strong><Badge>{periodDays.length} days</Badge><Badge>{selected.size} selected</Badge><Button variant="outline" onClick={toggleAll}><Check className="size-4"/>{allSelected?"Deselect all":"Select all days"}</Button><Button variant="outline" disabled={!selected.size} onClick={()=>setCopyOpen(true)}><Copy className="size-4"/>Copy selected days</Button><Button disabled={!periodDays.some((x:Editable)=>x.dirty)} onClick={()=>save(periodDays.filter((x:Editable)=>x.dirty))}><Save className="size-4"/>Save edited</Button></div><div className="grid gap-3">{periodDays.map((r:Editable)=>{const weekday=new Date(`${r.work_date}T12:00`).toLocaleDateString("en-US",{weekday:"short"});return <Card key={r.work_date} className={r.dirty?"border-amber-300":""}><div className="p-4"><div className="flex flex-wrap items-center gap-3"><input type="checkbox" className="size-4 accent-[#2563eb]" checked={selected.has(r.work_date)} onChange={e=>setSelected(s=>{const n=new Set(s);e.target.checked?n.add(r.work_date):n.delete(r.work_date);return n})}/><div className="w-24"><strong>{displayDate(r.work_date)}</strong><small className="ml-2 text-muted-foreground">{weekday}</small></div><div className="flex rounded-lg bg-muted p-1"><Button size="sm" variant={r.status==="worked"?"default":"ghost"} onClick={()=>setDay(r.work_date,{status:"worked",total_hours:r.total_hours||8,locations:r.locations.length?r.locations:[blankLocation()],expanded:true})}>Worked</Button><Button size="sm" variant={r.status==="off"?"default":"ghost"} onClick={()=>setDay(r.work_date,{status:"off",total_hours:0})}>Off</Button></div><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{cellText(r)}</span><strong className="text-primary">{compactNumber(r.total_hours)}h</strong><Button size="sm" disabled={!r.dirty} onClick={()=>save([r])}>Save</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={()=>void clearDay(r)}><Trash2 className="size-4"/>Clear record</Button><Button variant="ghost" size="icon" onClick={()=>setDay(r.work_date,{expanded:!r.expanded})}><ChevronDown className={`size-4 ${r.expanded?"rotate-180":""}`}/></Button></div>{r.expanded&&<RecordEditor record={r} bootstrap={bootstrap} update={p=>setDay(r.work_date,p)}/>}</div></Card>})}</div></>}
+ {!data?<Card><CardContent className="py-16 text-center"><Users className="mx-auto mb-3 size-10 text-primary"/><h3 className="font-bold">Select a worker to begin</h3><p className="mt-1 text-sm text-muted-foreground">Choose full month, 1–15, or 16–end before loading.</p></CardContent></Card>:<><div className="mb-4 flex flex-wrap items-center gap-2"><strong className="mr-auto">{data.worker.name} · {data.month} · {workerPeriodLabel(period)}</strong><Badge>{periodDays.length} days</Badge><Badge>{selected.size} selected</Badge><Button variant="outline" onClick={toggleAll}><Check className="size-4"/>{allSelected?"Deselect all":"Select all days"}</Button><Button variant="outline" disabled={!selected.size} onClick={()=>setCopyOpen(true)}><Copy className="size-4"/>Copy selected days</Button><Button disabled={!periodDays.some((x:Editable)=>x.dirty)} onClick={()=>save(periodDays.filter((x:Editable)=>x.dirty))}><Save className="size-4"/>Save edited</Button></div><div className="grid gap-3">{periodDays.map((r:Editable)=>{const weekday=new Date(`${r.work_date}T12:00`).toLocaleDateString("en-US",{weekday:"short"});return <Card key={r.work_date} className={r.dirty?"border-amber-300":""}><div className="p-4"><div className="flex flex-wrap items-center gap-3"><input type="checkbox" className="size-4 accent-[#2563eb]" checked={selected.has(r.work_date)} onChange={e=>setSelected(s=>{const n=new Set(s);e.target.checked?n.add(r.work_date):n.delete(r.work_date);return n})}/><div className="w-24"><strong>{displayDate(r.work_date)}</strong><small className="ml-2 text-muted-foreground">{weekday}</small></div><div className="flex rounded-lg bg-muted p-1"><Button size="sm" variant={r.status==="worked"?"default":"ghost"} onClick={()=>setDay(r.work_date,workedPatch(r,true))}>Worked</Button><Button size="sm" variant={r.status==="off"?"default":"ghost"} onClick={()=>setDay(r.work_date,offPatch())}>Off</Button></div><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{cellText(r)}</span><strong className="text-primary">{compactNumber(r.total_hours)}h</strong><Button size="sm" disabled={!r.dirty} onClick={()=>save([r])}>Save</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" onClick={()=>void clearDay(r)}><Trash2 className="size-4"/>Clear record</Button><Button variant="ghost" size="icon" onClick={()=>setDay(r.work_date,{expanded:!r.expanded})}><ChevronDown className={`size-4 ${r.expanded?"rotate-180":""}`}/></Button></div>{r.expanded&&<RecordEditor record={r} bootstrap={bootstrap} update={p=>setDay(r.work_date,p)}/>}</div></Card>})}</div></>}
  <Dialog open={copyOpen} onOpenChange={open=>{setCopyOpen(open);if(!open)setTargetSearch("")}}><DialogContent><DialogHeader><DialogTitle>Copy {selected.size} days</DialogTitle><DialogDescription>Select every worker who shared this schedule. Existing records on those dates will be replaced.</DialogDescription></DialogHeader><div className="relative"><Search className="absolute left-3 top-3.5 size-4 text-muted-foreground"/><Input autoFocus className="pl-9" value={targetSearch} onChange={e=>setTargetSearch(e.target.value)} placeholder="Find worker to select…"/></div><div className="max-h-72 overflow-auto rounded-xl border p-2">{copyTargets.map((w:Worker)=><label key={w.id} className="flex cursor-pointer items-center gap-3 rounded-lg p-2 hover:bg-muted"><input type="checkbox" checked={targets.includes(w.id)} onChange={e=>setTargets(t=>e.target.checked?[...t,w.id]:t.filter(id=>id!==w.id))}/><span className="avatar">{initials(w.name)}</span><span>{w.name}</span></label>)}{!copyTargets.length&&<p className="p-5 text-center text-sm text-muted-foreground">No worker matches this search.</p>}</div><div className="flex justify-end gap-2"><Button variant="ghost" onClick={()=>{setCopyOpen(false);setTargetSearch("")}}>Cancel</Button><Button disabled={!targets.length} onClick={copy}><Copy className="size-4"/>Copy to {targets.length} workers</Button></div></DialogContent></Dialog></div>
 }

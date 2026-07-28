@@ -2,7 +2,7 @@
 
 Production deployment, integration, recovery, and maintainer handoff for the
 Speed Construction Workforce App.
-Last reviewed against the code: **July 27, 2026**
+Last reviewed against the code: **July 28, 2026**
 
 This document is written for the person who inherits the application. It
 assumes that person may not know Vercel, PostgreSQL, Lark, or this codebase yet.
@@ -171,7 +171,7 @@ with commas and no quotes.
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `WORKER_ADMIN_PASSWORD` | recommended | alternative Worker Management access |
-| `PAYROLL_PASSWORD` | yes for password payroll access | protects Payroll Check |
+| `PAYROLL_PASSWORD` | yes for sensitive report access | protects both Payroll Check and Location Check |
 | `EXPORT_PASSWORD` | yes | protects exports/workbook controls |
 
 Use unique passwords. Do not reuse a Lark password or database password.
@@ -438,6 +438,9 @@ fetch("/api/lark/setup")
 
 Expected tables and exact fields are defined in `api/lark/setup.py::SCHEMA`.
 Do not manually rename them without changing code and migration tests.
+Run the POST setup once after every release that adds fields to `SCHEMA`, before
+processing the PostgreSQL-to-Lark mirror queue. This release adds location-hour
+source, override, and audit fields used by entry editing.
 
 ### Lark event callback
 
@@ -733,7 +736,8 @@ The build output is ignored; do not force-add `static/app-ui`.
 6. Reload and confirm persistence.
 7. Payroll unlock and one pay period load.
 8. Worker detail expands immediately below the row.
-9. Location check loads one known location.
+9. The same Payroll password grant opens Location Check and one known location
+   loads.
 10. Worker Management access behaves correctly.
 11. Export access behaves correctly.
 12. `/api/sync/lark` shows no unexpected failures.

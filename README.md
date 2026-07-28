@@ -1,7 +1,7 @@
 # Speed Construction Workforce App
 
 Maintainer handoff and implementation reference
-Last reviewed against the code: **July 27, 2026**
+Last reviewed against the code: **July 28, 2026**
 
 This repository contains the production workforce recording and payroll-review
 website developed for Speed Construction. The application records daily work,
@@ -182,6 +182,8 @@ Payroll is an estimate and must be reviewed by the company payroll owner.
 
 ### Locations
 
+- Protected by the same Lark-admin/`PAYROLL_PASSWORD` grant as Payroll Check.
+  Unlocking either page unlocks both for eight hours.
 - Selects a location and date range.
 - Shows workers, hours, days, first/last work date, cost centers, and estimated
   labor cost.
@@ -301,15 +303,27 @@ recombines them into one location.
   - changing Start preserves hours and moves End;
   - changing End recalculates hours;
   - changing Location Hours preserves Start and moves End.
-- Total Hours and Overtime Hours are also linked to the last location's End.
+- Location Hours are the normal source of truth. Changing a location's Hours,
+  Start, or End immediately recalculates the Location Hours Sum, Total Hours,
+  and calculated Overtime.
+- Editing Total Hours creates a manual override; it does not redistribute or
+  silently change location allocations.
+- Editing Overtime creates a separate manual override.
+- A mismatch displays the calculated and recorded values and offers reset
+  controls.
+- Saving a mismatch requires an override reason. The record preserves location
+  sum, official total, difference, calculated/recorded overtime, source,
+  reason, actor, and update time.
 - Hour number inputs step by **0.5 hour**.
 - If all time ranges are blank, a worked day defaults to 8 total hours.
 - If any location uses time, all named locations need complete Start and End
   values.
 - Ranges cannot end before they start or overlap.
-- The sum of location ranges must match Total Hours.
-- Explicit Overtime must match `max(Total Hours - 8, 0)`.
-- Contradictions are rejected at save time with a `Time conflict` message.
+- Each entered time range must match that location's Hours.
+- Location ranges must not overlap.
+- Total/Location or Overtime/calculated discrepancies are allowed only as
+  explicit, reasoned manual overrides; invalid ranges and numeric values remain
+  blocking errors.
 
 Historical rows imported from the original workbook can have blank time ranges.
 Do not manufacture ranges for old data merely to fill the UI.
@@ -395,8 +409,8 @@ Amounts are rounded to two decimals after aggregation.
 | Logical table | Stable key | Purpose |
 | --- | --- | --- |
 | Workers | `Worker Key` | identity, classification, rate, aliases, active state |
-| Work Days | `Work Day Key` | one worker/date status and daily totals |
-| Location Entries | `Location Entry Key` | location, cost center, range, allocated hours |
+| Work Days | `Work Day Key` | one worker/date status, official totals, and override metadata |
+| Location Entries | `Location Entry Key` | location, recorded hours, cost center, range, and payroll allocation |
 | Cost Centers | `Cost Center ID` | selectable cost-center reference |
 | Payroll Checks | `Payroll Check Key` | checked state per worker/pay period |
 | Audit Log | `Audit Key` | actor and old/new JSON for changes |
@@ -514,7 +528,7 @@ The Lark App Secret and access token never enter frontend JavaScript.
 | Capability | Requirement |
 | --- | --- |
 | Normal pages and entry | valid Lark session |
-| Payroll | Lark admin or `PAYROLL_PASSWORD` grant |
+| Payroll and Location Check | Lark admin or shared `PAYROLL_PASSWORD` grant |
 | Worker management | Lark admin or `WORKER_ADMIN_PASSWORD` grant |
 | Import/migration | Lark admin only |
 | Export/workbook | `EXPORT_PASSWORD` grant |
@@ -650,7 +664,7 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-At this handoff, the Python suite contains **53 tests** with one workbook test
+At this handoff, the Python suite contains **57 tests** with one workbook test
 skipped when the private payroll reference workbook is not present.
 
 Before merging a change:

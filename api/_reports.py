@@ -90,13 +90,19 @@ def load_report_data(
             continue
         regular = number_value(field(record, "Regular Hours"))
         overtime = number_value(field(record, "Overtime Hours"))
+        stored_location_hours = field(record, "Location Hours")
+        location_hours = (
+            number_value(stored_location_hours)
+            if stored_location_hours not in (None, "")
+            else regular + overtime
+        )
         center_id = text_value(field(record, "Cost Center ID"))
         center_name = text_value(field(record, "Cost Center Name"))
         locations_by_day[day_key].append(
             {
                 "location_id": text_value(field(record, "Location Entry Key")),
                 "name": text_value(field(record, "Location")),
-                "hours": round(regular + overtime, 2),
+                "hours": round(location_hours, 2),
                 "regular_hours": regular,
                 "overtime_hours": overtime,
                 "start_time": text_value(field(record, "Start Time")),

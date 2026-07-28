@@ -26,7 +26,18 @@ function timeFromMinutes(value: number): string {
 }
 
 export function cleanLocations(locations: WorkLocation[]) {
-  return locations.filter(l => l.name.trim()).map(l => ({ name: l.name.trim(), start_time: l.start_time || "", end_time: l.end_time || "", hours: rangeHours(l.start_time, l.end_time), cost_centers: l.cost_centers || [] }))
+  return locations.filter(l => l.name.trim()).map(l => {
+    const enteredHours = l.hours === null || l.hours === undefined || !Number.isFinite(Number(l.hours))
+      ? null
+      : Math.round(Number(l.hours) * 100) / 100
+    return {
+      name: l.name.trim(),
+      start_time: l.start_time || "",
+      end_time: l.end_time || "",
+      hours: enteredHours ?? rangeHours(l.start_time, l.end_time),
+      cost_centers: l.cost_centers || [],
+    }
+  })
 }
 
 export function LocationEditor({ value, onChange, suggestions, costCenters, disabled = false }: { value: WorkLocation[]; onChange: (v: WorkLocation[]) => void; suggestions: string[]; costCenters: CostCenter[]; disabled?: boolean }) {

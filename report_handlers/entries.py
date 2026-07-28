@@ -100,8 +100,12 @@ def joined_days(day_records: list[dict], location_records: list[dict]) -> dict[s
                 "cost_centers": [],
             },
         )
-        location["hours"] += number_value(field(record, "Regular Hours")) + number_value(
-            field(record, "Overtime Hours")
+        stored_location_hours = field(record, "Location Hours")
+        location["hours"] += (
+            number_value(stored_location_hours)
+            if stored_location_hours not in (None, "")
+            else number_value(field(record, "Regular Hours"))
+            + number_value(field(record, "Overtime Hours"))
         )
         center_id = text_value(field(record, "Cost Center ID"))
         if center_id and center_id not in {item["id"] for item in location["cost_centers"]}:
@@ -127,14 +131,35 @@ def joined_days(day_records: list[dict], location_records: list[dict]) -> dict[s
                     "end_time": "" if source == "lark-drive-migration" else item["end_time"],
                 }
             )
+        stored_location_total = field(record, "Location Hours Sum")
+        location_total = (
+            number_value(stored_location_total)
+            if stored_location_total not in (None, "")
+            else round(sum(float(item["hours"]) for item in location_items), 2)
+        )
+        total_hours = number_value(field(record, "Total Hours"))
+        stored_calculated_overtime = field(record, "Calculated Overtime Hours")
         output[day_key] = {
             "day_id": record.get("record_id", ""),
             "worker_key": text_value(field(record, "Worker Key")),
             "worker_name": text_value(field(record, "Worker Name")),
             "work_date": date_value(field(record, "Work Date")),
             "status": text_value(field(record, "Status")) or "worked",
-            "total_hours": number_value(field(record, "Total Hours")),
+            "total_hours": total_hours,
+            "location_hours_sum": location_total,
+            "total_hours_source": text_value(field(record, "Total Hours Source")),
+            "hours_difference": number_value(
+                field(record, "Hours Difference"),
+                total_hours - location_total,
+            ),
             "overtime_hours": number_value(field(record, "Overtime Hours")),
+            "calculated_overtime_hours": number_value(
+                stored_calculated_overtime,
+                max(total_hours - 8, 0),
+            ),
+            "overtime_source": text_value(field(record, "Overtime Source")),
+            "override_reason": text_value(field(record, "Override Reason")),
+            "override_by": text_value(field(record, "Override By")),
             "extra_pay": number_value(field(record, "Extra Pay")),
             "start_time": text_value(field(record, "Start Time")),
             "end_time": text_value(field(record, "End Time")),
@@ -151,7 +176,14 @@ def blank_day(worker: dict, work_date: str) -> dict:
         "work_date": work_date,
         "status": "worked",
         "total_hours": 8,
+        "location_hours_sum": 8,
+        "total_hours_source": "calculated",
+        "hours_difference": 0,
         "overtime_hours": 0,
+        "calculated_overtime_hours": 0,
+        "overtime_source": "calculated",
+        "override_reason": "",
+        "override_by": "",
         "extra_pay": 0,
         "start_time": "",
         "end_time": "",
@@ -171,7 +203,12 @@ def output_day(item: dict, worker: dict, work_date: str) -> dict:
     }
 
 
-def normalized_text(status: str, locations: list[dict], total: float, extra: float) -> str:
+def normalized_text(
+    status: str,
+    locations: list[dict],
+    overtime: float,
+    extra: float,
+) -> str:
     if status == "off":
         return "off"
     parts = []
@@ -179,7 +216,6 @@ def normalized_text(status: str, locations: list[dict], total: float, extra: flo
         hours = location.get("hours")
         parts.append(f"{location['name']}{f'({hours:g})' if hours is not None else ''}")
     result = ";".join(parts)
-    overtime = max(total - 8, 0)
     if overtime:
         result += f", ot {overtime:g}h"
     if extra:
@@ -213,6 +249,8 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
         end_time = str(location.get("end_time") or "")
         hours = location.get("hours")
         hours = None if hours in (None, "") else float(hours)
+        if hours is not None and (hours < 0 or hours > 24):
+            raise ValueError(f"Location hours for {name} must be between 0 and 24.")
         cleaned.append(
             {
                 "name": name,
@@ -242,37 +280,74 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
             end_minutes = end_hour * 60 + end_minute
             if end_minutes <= start_minutes:
                 raise ValueError(f"Time conflict: {location['name']} must end after it starts.")
-            location["hours"] = round((end_minutes - start_minutes) / 60, 2)
+            range_hours = round((end_minutes - start_minutes) / 60, 2)
+            if location["hours"] is not None and abs(location["hours"] - range_hours) > 0.01:
+                raise ValueError(
+                    f"Time conflict: {location['name']}'s time range is "
+                    f"{range_hours:g}h, but Location hours is {location['hours']:g}h."
+                )
+            location["hours"] = range_hours
             ranges.append((start_minutes, end_minutes, location["name"]))
         ranges.sort()
         for previous, current in zip(ranges, ranges[1:]):
             if current[0] < previous[1]:
                 raise ValueError(f"Time conflict: {previous[2]} overlaps {current[2]}.")
+    if cleaned and all(item["hours"] is not None for item in cleaned):
         calculated_total = round(sum(float(item["hours"]) for item in cleaned), 2)
     supplied_total = raw.get("total_hours")
-    total = (
-        calculated_total if supplied_total in (None, "") and calculated_total is not None
-        else 8.0 if supplied_total in (None, "")
-        else float(supplied_total)
-    ) if status == "worked" else 0.0
+    total_source = str(raw.get("total_hours_source") or "calculated").casefold()
+    if total_source not in {"calculated", "manual"}:
+        raise ValueError("Total hours source must be calculated or manual.")
+    if status != "worked":
+        total = 0.0
+        total_source = "calculated"
+    elif total_source == "calculated" and calculated_total is not None:
+        # The backend repeats the source-of-truth calculation so a stale
+        # browser total cannot overwrite newly edited location hours.
+        total = calculated_total
+    elif supplied_total in (None, ""):
+        total = calculated_total if calculated_total is not None else 8.0
+    else:
+        total = float(supplied_total)
     if total < 0 or total > 24:
         raise ValueError("Hours must be between 0 and 24.")
-    if calculated_total is not None and abs(calculated_total - total) > 0.01:
+    location_total = calculated_total if calculated_total is not None else total
+    hours_difference = round(total - location_total, 2)
+    override_reason = str(raw.get("override_reason") or "").strip()
+    expected_overtime = round(max(total - 8, 0), 2)
+    overtime_source = str(raw.get("overtime_source") or "calculated").casefold()
+    if overtime_source not in {"calculated", "manual"}:
+        raise ValueError("Overtime source must be calculated or manual.")
+    if status != "worked":
+        overtime = 0.0
+        overtime_source = "calculated"
+    elif overtime_source == "calculated":
+        overtime = expected_overtime
+    else:
+        overtime = float(raw.get("overtime_hours") or 0)
+    if overtime < 0 or overtime > total:
+        raise ValueError("Overtime must be between 0 and Total hours.")
+    overtime_difference = round(overtime - expected_overtime, 2)
+    if (
+        (total_source == "manual" and abs(hours_difference) > 0.01)
+        or (overtime_source == "manual" and abs(overtime_difference) > 0.01)
+    ) and not override_reason:
         raise ValueError(
-            f"Time conflict: location ranges total {calculated_total:g}h, but Total hours is {total:g}h."
-        )
-    expected_overtime = max(total - 8, 0)
-    overtime = float(raw.get("overtime_hours") or 0)
-    if abs(expected_overtime - overtime) > 0.01:
-        raise ValueError(
-            f"Time conflict: {total:g} total hours requires {expected_overtime:g} overtime hours, not {overtime:g}h."
+            "Enter an override reason before saving mismatched Total or Overtime hours."
         )
     return {
         "worker": worker,
         "date": work_date,
         "status": status,
         "total": total,
+        "location_total": location_total,
+        "total_source": total_source,
+        "hours_difference": hours_difference,
         "overtime": overtime,
+        "calculated_overtime": expected_overtime,
+        "overtime_source": overtime_source,
+        "override_reason": override_reason,
+        "override_by": str(raw.get("override_by") or "").strip(),
         "extra": float(raw.get("extra_pay") or 0) if status == "worked" else 0.0,
         "start": "",
         "end": "",
@@ -288,7 +363,7 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
     start = min(item["date"] for item in parsed).isoformat()
     end = max(item["date"] for item in parsed).isoformat()
     existing_days, existing_locations = load_range(base, start, end)
-    now = date_millis(date.today())
+    now = int(datetime.now(ZoneInfo("America/Los_Angeles")).timestamp() * 1000)
     day_rows = []
     location_rows = []
     affected_keys = set()
@@ -304,13 +379,20 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
                 "Work Date": date_millis(item["date"]),
                 "Status": item["status"],
                 "Total Hours": round(item["total"], 2),
+                "Location Hours Sum": round(item["location_total"], 2),
+                "Total Hours Source": item["total_source"],
+                "Hours Difference": round(item["hours_difference"], 2),
                 "Overtime Hours": round(item["overtime"], 2),
+                "Calculated Overtime Hours": round(item["calculated_overtime"], 2),
+                "Overtime Source": item["overtime_source"],
+                "Override Reason": item["override_reason"],
+                "Override By": item["override_by"] if item["override_reason"] else "",
                 "Extra Pay": round(item["extra"], 2),
                 "Start Time": item["start"],
                 "End Time": item["end"],
                 "Notes": item["notes"],
                 "Original Text": normalized_text(
-                    item["status"], item["locations"], item["total"], item["extra"]
+                    item["status"], item["locations"], item["overtime"], item["extra"]
                 ),
                 "Source": "web-entry",
                 "Confidence": "high",
@@ -334,6 +416,7 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
             overtime_remaining = round(max(overtime_remaining - overtime_total, 0), 2)
             regular_used = 0.0
             overtime_used = 0.0
+            location_hours_used = 0.0
             for center_index, center in enumerate(centers, 1):
                 last_center = center_index == len(centers)
                 regular_share = (
@@ -344,8 +427,13 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
                     round(overtime_total - overtime_used, 2)
                     if last_center else round(overtime_total / len(centers), 2)
                 )
+                location_hours_share = (
+                    round(location_hours - location_hours_used, 2)
+                    if last_center else round(location_hours / len(centers), 2)
+                )
                 regular_used += regular_share
                 overtime_used += overtime_share
+                location_hours_used += location_hours_share
                 location_rows.append(
                     {
                         "Location Entry Key": f"{day_key}|{location_index}|{center_index}",
@@ -357,6 +445,7 @@ def save_rows(base: LarkBase, rows: list[dict], worker_map: dict[str, dict]) -> 
                         "Cost Center Name": str(center.get("name") or "").strip(),
                         "Start Time": location["start_time"],
                         "End Time": location["end_time"],
+                        "Location Hours": location_hours_share,
                         "Regular Hours": regular_share,
                         "Overtime Hours": overtime_share,
                         "Display Order": location_index,
@@ -452,23 +541,35 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
 
     def do_POST(self) -> None:
-        if not session(self):
+        current_session = session(self)
+        if not current_session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         try:
             body = read_body(self)
+            actor = str(
+                current_session.get("name")
+                or current_session.get("sub")
+                or ""
+            ).strip()
             base = DataStore()
             worker_list, worker_map = workers(base)
             del worker_list
             action = query_action(self)
             if action == "day":
                 selected_date = date.fromisoformat(str(body.get("date") or "")).isoformat()
-                rows = [{**row, "date": selected_date} for row in body.get("records") or []]
+                rows = [
+                    {**row, "date": selected_date, "override_by": actor}
+                    for row in body.get("records") or []
+                ]
                 json_response(self, {"saved": True, **save_rows(base, rows, worker_map)})
                 return
             if action == "worker_days":
                 forced_worker = str(int(body.get("worker_id") or 0))
-                rows = [{**row, "forced_worker": forced_worker} for row in body.get("records") or []]
+                rows = [
+                    {**row, "forced_worker": forced_worker, "override_by": actor}
+                    for row in body.get("records") or []
+                ]
                 json_response(self, {"saved": True, **save_rows(base, rows, worker_map)})
                 return
             if action == "day_clear":
@@ -486,7 +587,7 @@ class handler(BaseHTTPRequestHandler):
                 if not source_rows or not targets:
                     raise ValueError("Choose days and at least one target worker.")
                 rows = [
-                    {**row, "forced_worker": target}
+                    {**row, "forced_worker": target, "override_by": actor}
                     for target in targets for row in source_rows
                 ]
                 result = save_rows(base, rows, worker_map)

@@ -66,6 +66,7 @@ class EntryTests(unittest.TestCase):
         )
         locations = base.saved["Location Entries"]
         self.assertEqual(sum(item["Regular Hours"] for item in locations), 8)
+        self.assertEqual(sum(item["Location Hours"] for item in locations), 8)
         self.assertEqual([item["Regular Hours"] for item in locations], [2.67, 2.67, 2.66])
         self.assertEqual(result["days"], 1)
         self.assertEqual(base.deleted, [("Location Entries", "old-location")])
@@ -95,8 +96,40 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(locations[0]["Start Time"], "08:00")
         self.assertEqual(locations[1]["End Time"], "17:00")
 
-    def test_conflicting_total_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Time conflict"):
+    def test_calculated_total_follows_edited_location_hours(self):
+        base = FakeBase()
+        save_rows(
+            base,
+            [
+                {
+                    "worker_id": 7,
+                    "date": "2026-07-02",
+                    "status": "worked",
+                    # Simulate a stale browser total. Calculated mode makes the
+                    # location value authoritative on the backend too.
+                    "total_hours": 8,
+                    "overtime_hours": 0,
+                    "total_hours_source": "calculated",
+                    "overtime_source": "calculated",
+                    "locations": [
+                        {
+                            "name": "A",
+                            "hours": 9,
+                            "cost_centers": [{"id": "1", "name": "One"}],
+                        },
+                    ],
+                }
+            ],
+            self.worker_map,
+        )
+        day = base.saved["Work Days"][0]
+        self.assertEqual(day["Location Hours Sum"], 9)
+        self.assertEqual(day["Total Hours"], 9)
+        self.assertEqual(day["Overtime Hours"], 1)
+        self.assertEqual(day["Total Hours Source"], "calculated")
+
+    def test_manual_total_override_requires_reason(self):
+        with self.assertRaisesRegex(ValueError, "override reason"):
             save_rows(
                 FakeBase(),
                 [
@@ -104,15 +137,54 @@ class EntryTests(unittest.TestCase):
                         "worker_id": 7,
                         "date": "2026-07-02",
                         "status": "worked",
-                        "total_hours": 8,
-                        "overtime_hours": 0,
+                        "total_hours": 10,
+                        "total_hours_source": "manual",
+                        "overtime_hours": 2,
+                        "overtime_source": "calculated",
                         "locations": [
-                            {"name": "A", "start_time": "08:00", "end_time": "17:00", "cost_centers": [{"id": "1", "name": "One"}]},
+                            {
+                                "name": "A",
+                                "hours": 8,
+                                "cost_centers": [{"id": "1", "name": "One"}],
+                            },
                         ],
-                    }
+                    },
                 ],
                 self.worker_map,
             )
+
+    def test_manual_total_override_preserves_location_and_official_totals(self):
+        base = FakeBase()
+        save_rows(
+            base,
+            [
+                {
+                    "worker_id": 7,
+                    "date": "2026-07-02",
+                    "status": "worked",
+                    "total_hours": 10,
+                    "total_hours_source": "manual",
+                    "overtime_hours": 2,
+                    "overtime_source": "calculated",
+                    "override_reason": "Supervisor confirmed two unallocated hours",
+                    "locations": [
+                        {
+                            "name": "A",
+                            "hours": 8,
+                            "cost_centers": [{"id": "1", "name": "One"}],
+                        },
+                    ],
+                }
+            ],
+            self.worker_map,
+        )
+        day = base.saved["Work Days"][0]
+        location = base.saved["Location Entries"][0]
+        self.assertEqual(day["Location Hours Sum"], 8)
+        self.assertEqual(day["Total Hours"], 10)
+        self.assertEqual(day["Hours Difference"], 2)
+        self.assertEqual(day["Override Reason"], "Supervisor confirmed two unallocated hours")
+        self.assertEqual(location["Location Hours"], 8)
 
     def test_clear_day_deletes_work_day_and_linked_locations(self):
         class ClearBase(FakeBase):

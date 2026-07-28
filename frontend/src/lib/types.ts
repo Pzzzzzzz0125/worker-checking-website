@@ -16,6 +16,13 @@ export type WorkRecord = {
   status: "worked" | "off" | "unknown" | ""
   total_hours: number
   overtime_hours?: number
+  location_hours_sum?: number
+  total_hours_source?: "calculated" | "manual"
+  hours_difference?: number
+  calculated_overtime_hours?: number
+  overtime_source?: "calculated" | "manual"
+  override_reason?: string
+  override_by?: string
   extra_pay: number
   start_time: string
   end_time: string
