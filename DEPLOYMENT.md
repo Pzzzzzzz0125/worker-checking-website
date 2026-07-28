@@ -171,7 +171,7 @@ with commas and no quotes.
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `WORKER_ADMIN_PASSWORD` | recommended | alternative Worker Management access |
-| `PAYROLL_PASSWORD` | yes for sensitive report access | protects both Payroll Check and Location Check |
+| `PAYROLL_PASSWORD` | yes for sensitive report access | protects both Payroll Check and Site Check |
 | `EXPORT_PASSWORD` | yes | protects exports/workbook controls |
 
 Use unique passwords. Do not reuse a Lark password or database password.
@@ -731,15 +731,16 @@ The build output is ignored; do not force-add `static/app-ui`.
 1. `/api/health` returns HTTP 200 and `data_backend: postgres`.
 2. Sign in with an approved Lark user.
 3. Overview loads and date filtering works.
-4. Daily Entry finds workers and cost centers.
+4. Daily Entry finds workers and cost codes.
 5. Save a controlled test record or use an approved existing record.
 6. Reload and confirm persistence.
 7. Payroll unlock and one pay period load.
 8. Worker detail expands immediately below the row.
-9. The same Payroll password grant opens Location Check and one known location
+9. The same Payroll password grant opens Site Check and one known site
    loads.
 10. Worker Management access behaves correctly.
-11. Export access behaves correctly.
+11. Export access behaves correctly; generate one auditor report and one
+    invoice with controlled filters, then open both downloaded `.xlsx` files.
 12. `/api/sync/lark` shows no unexpected failures.
 13. Lark Work Log/Sheet eventually reflects the controlled update.
 14. Remove/revert the controlled test data through the application.

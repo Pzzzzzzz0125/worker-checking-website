@@ -236,7 +236,7 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
         raise ValueError("Status must be worked or off.")
     locations = raw.get("locations") or []
     if status == "worked" and not locations:
-        raise ValueError(f"Add a location for {worker['name']} on {work_date.isoformat()}.")
+        raise ValueError(f"Add a site for {worker['name']} on {work_date.isoformat()}.")
     cleaned = []
     for location in locations if status == "worked" else []:
         name = str(location.get("name") or "").strip()
@@ -244,15 +244,15 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
         if not name:
             continue
         if not centers:
-            raise ValueError(f"Choose a cost center for {name}.")
+            raise ValueError(f"Choose a cost code for {name}.")
         if any(not str(center.get("id") or "").strip() for center in centers):
-            raise ValueError(f"Cost center ID is missing for {name}.")
+            raise ValueError(f"Cost code ID is missing for {name}.")
         start_time = str(location.get("start_time") or "")
         end_time = str(location.get("end_time") or "")
         hours = location.get("hours")
         hours = None if hours in (None, "") else float(hours)
         if hours is not None and (hours < 0 or hours > 24):
-            raise ValueError(f"Location hours for {name} must be between 0 and 24.")
+            raise ValueError(f"Site hours for {name} must be between 0 and 24.")
         cleaned.append(
             {
                 "name": name,
@@ -263,13 +263,13 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
             }
         )
     if status == "worked" and not cleaned:
-        raise ValueError("Add at least one valid location.")
+        raise ValueError("Add at least one valid site.")
     entered_times = [bool(item["start_time"] or item["end_time"]) for item in cleaned]
     calculated_total = None
     if any(entered_times):
         if not all(entered_times) or any(not item["start_time"] or not item["end_time"] for item in cleaned):
             raise ValueError(
-                "Time conflict: enter both Start and End for every location, or leave all location times blank."
+                "Time conflict: enter both Start and End for every site, or leave all site times blank."
             )
         ranges = []
         for location in cleaned:
@@ -286,7 +286,7 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
             if location["hours"] is not None and abs(location["hours"] - range_hours) > 0.01:
                 raise ValueError(
                     f"Time conflict: {location['name']}'s time range is "
-                    f"{range_hours:g}h, but Location hours is {location['hours']:g}h."
+                    f"{range_hours:g}h, but Site hours is {location['hours']:g}h."
                 )
             location["hours"] = range_hours
             ranges.append((start_minutes, end_minutes, location["name"]))

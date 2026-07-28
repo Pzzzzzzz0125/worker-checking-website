@@ -261,7 +261,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
           <Button variant="danger" onClick={() => void remove()} disabled={saving || removing}><Archive className="size-4" />{removing ? "Archiving…" : "Archive worker"}</Button>
         </div>}
         {draft.id > 0 && !draft.active && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4">
-          <div><strong className="block text-sm text-sky-950">Restore this worker</strong><p className="mt-1 text-xs text-sky-800">The worker will return to entry, overview, payroll, and location pages.</p></div>
+          <div><strong className="block text-sm text-sky-950">Restore this worker</strong><p className="mt-1 text-xs text-sky-800">The worker will return to entry, overview, payroll, and site pages.</p></div>
           <Button onClick={() => void restore()} disabled={saving || restoring}><ArchiveRestore className="size-4" />{restoring ? "Restoring…" : "Restore worker"}</Button>
         </div>}
         <div className="mt-5 flex flex-wrap justify-end gap-2">

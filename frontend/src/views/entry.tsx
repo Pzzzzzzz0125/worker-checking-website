@@ -75,12 +75,12 @@ function timeResult(locations:WorkLocation[]){
   const rows=locations.filter(x=>x.name.trim()||x.start_time||x.end_time||x.hours!==null)
   const entered=rows.filter(x=>x.start_time||x.end_time)
   if(!entered.length)return {error:""}
-  if(entered.length!==rows.length||entered.some(x=>!x.start_time||!x.end_time))return {error:"Time conflict: enter both Start and End for every location, or leave all location times blank."}
-  const ranges=rows.map((x,index)=>({name:x.name.trim()||`Location ${index+1}`,start:minutes(x.start_time),end:minutes(x.end_time),hours:x.hours}))
+  if(entered.length!==rows.length||entered.some(x=>!x.start_time||!x.end_time))return {error:"Time conflict: enter both Start and End for every site, or leave all site times blank."}
+  const ranges=rows.map((x,index)=>({name:x.name.trim()||`Site ${index+1}`,start:minutes(x.start_time),end:minutes(x.end_time),hours:x.hours}))
   const invalid=ranges.find(x=>x.end<=x.start)
   if(invalid)return {error:`Time conflict: ${invalid.name} must end after it starts.`}
   const mismatched=ranges.find(x=>x.hours!==null&&Math.abs((x.end-x.start)/60-Number(x.hours))>.01)
-  if(mismatched)return {error:`Time conflict: ${mismatched.name}'s time range does not match its Location hours.`}
+  if(mismatched)return {error:`Time conflict: ${mismatched.name}'s time range does not match its Site hours.`}
   const sorted=[...ranges].sort((a,b)=>a.start-b.start)
   for(let i=1;i<sorted.length;i++)if(sorted[i].start<sorted[i-1].end)return {error:`Time conflict: ${sorted[i-1].name} overlaps ${sorted[i].name}.`}
   return {error:""}
@@ -108,12 +108,12 @@ function payload(r: Editable) {
 }
 function validate(r:Editable){
   const locations=cleanLocations(r.locations)
-  if(r.status==="worked"&&!locations.length)return "Add at least one location."
+  if(r.status==="worked"&&!locations.length)return "Add at least one site."
   const missingCenter=locations.find(x=>!x.cost_centers.length)
-  if(r.status==="worked"&&missingCenter)return `Choose a cost center for ${missingCenter.name}.`
+  if(r.status==="worked"&&missingCenter)return `Choose a cost code for ${missingCenter.name}.`
   if(r.status!=="worked")return ""
   const invalidHours=locations.find(x=>x.hours===null||!Number.isFinite(Number(x.hours))||Number(x.hours)<0||Number(x.hours)>24)
-  if(invalidHours)return `Enter valid Location hours for ${invalidHours.name}.`
+  if(invalidHours)return `Enter valid Site hours for ${invalidHours.name}.`
   const timing=timeResult(locations)
   if(timing.error)return timing.error
   const locationSum=locationHoursSum(locations),total=Number(r.total_hours??8),overtime=Number(r.overtime_hours||0)
@@ -122,7 +122,7 @@ function validate(r:Editable){
   const totalMismatch=Math.abs(locationSum-total)>.01
   const expected=Math.max(total-8,0)
   const overtimeMismatch=Math.abs(expected-overtime)>.01
-  if(r.total_hours_source!=="manual"&&totalMismatch)return "Calculated Total hours must match the Location hours sum."
+  if(r.total_hours_source!=="manual"&&totalMismatch)return "Calculated Total hours must match the Site hours sum."
   if(r.overtime_source!=="manual"&&overtimeMismatch)return "Calculated Overtime must match Total hours."
   if((totalMismatch||overtimeMismatch)&&!r.override_reason.trim())return "Enter an override reason before saving mismatched Total or Overtime hours."
   return ""
@@ -229,7 +229,7 @@ function RecordEditor({ record, update, bootstrap }: { record: Editable; update:
  return <div className="mt-4 grid gap-4 border-t pt-4">
    <LocationEditor value={record.locations} onChange={changeLocations} suggestions={bootstrap.locations} costCenters={bootstrap.cost_centers} disabled={!worked}/>
    <div className="grid gap-3 rounded-xl border bg-slate-50 p-3 sm:grid-cols-3">
-     <div><span className="text-xs font-semibold text-muted-foreground">Location hours sum</span><strong className="mt-1 block text-lg">{compactNumber(locationSum)}h</strong></div>
+     <div><span className="text-xs font-semibold text-muted-foreground">Site hours sum</span><strong className="mt-1 block text-lg">{compactNumber(locationSum)}h</strong></div>
      <div><span className="text-xs font-semibold text-muted-foreground">Regular hours</span><strong className="mt-1 block text-lg">{compactNumber(Math.max(total-overtime,0))}h</strong></div>
      <div><span className="text-xs font-semibold text-muted-foreground">Calculated overtime</span><strong className="mt-1 block text-lg">{compactNumber(calculatedOvertime)}h</strong></div>
    </div>
@@ -239,11 +239,11 @@ function RecordEditor({ record, update, bootstrap }: { record: Editable; update:
      <label className="field-label">Extra pay<Input type="number" min="0" step="1" disabled={!worked} value={record.extra_pay} onChange={e=>update({extra_pay:Number(e.target.value)})}/></label>
    </div>
    {(totalMismatch||overtimeMismatch)&&<div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-     <div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0"/><div className="flex-1">{totalMismatch&&<p>Location hours add up to {compactNumber(locationSum)}h, but Total Hours is {compactNumber(total)}h. Difference: {total>locationSum?"+":""}{compactNumber(total-locationSum)}h.</p>}{overtimeMismatch&&<p>Calculated overtime is {compactNumber(calculatedOvertime)}h, but recorded Overtime is {compactNumber(overtime)}h.</p>}</div></div>
-     <div className="mt-3 flex flex-wrap gap-2">{totalMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetTotal}><RotateCcw className="size-4"/>Reset to location sum</Button>}{overtimeMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetOvertime}><RotateCcw className="size-4"/>Reset overtime</Button>}</div>
+     <div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0"/><div className="flex-1">{totalMismatch&&<p>Site hours add up to {compactNumber(locationSum)}h, but Total Hours is {compactNumber(total)}h. Difference: {total>locationSum?"+":""}{compactNumber(total-locationSum)}h.</p>}{overtimeMismatch&&<p>Calculated overtime is {compactNumber(calculatedOvertime)}h, but recorded Overtime is {compactNumber(overtime)}h.</p>}</div></div>
+     <div className="mt-3 flex flex-wrap gap-2">{totalMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetTotal}><RotateCcw className="size-4"/>Reset to site sum</Button>}{overtimeMismatch&&<Button type="button" size="sm" variant="outline" onClick={resetOvertime}><RotateCcw className="size-4"/>Reset overtime</Button>}</div>
      <label className="field-label mt-3">Override reason<Input value={record.override_reason} onChange={e=>update({override_reason:e.target.value})} placeholder="Required to save a mismatch, e.g. Supervisor confirmed"/></label>
    </div>}
-   <p className="text-xs text-muted-foreground">Location hours are the normal source of truth: changing a location recalculates Total and Overtime. Editing Total or Overtime creates a manual override without silently changing location allocations. Time ranges must still match each location's hours.</p>
+   <p className="text-xs text-muted-foreground">Site hours are the normal source of truth: changing a site recalculates Total and Overtime. Editing Total or Overtime creates a manual override without silently changing site allocations. Time ranges must still match each site's hours.</p>
    <label className="field-label">Notes<Input disabled={!worked} value={record.notes} onChange={e=>update({notes:e.target.value})} placeholder="Optional"/></label>
    <div className="flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs text-white"><span className="text-slate-400">Normalized cell</span><code className="overflow-hidden text-ellipsis">{cellText(record)}</code></div>
  </div>

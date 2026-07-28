@@ -20,7 +20,7 @@ class handler(BaseHTTPRequestHandler):
         start = query.get("from", [""])[0]
         end = query.get("to", [""])[0]
         if not requested or len(start) != 10 or len(end) != 10 or start > end:
-            json_response(self, {"error": "Choose a location and valid date range."}, 400)
+            json_response(self, {"error": "Choose a site and valid date range."}, 400)
             return
         try:
             requested_start = date.fromisoformat(start)
@@ -41,7 +41,7 @@ class handler(BaseHTTPRequestHandler):
             if not matched:
                 matched = next((name for name in names if requested.casefold() in name.casefold()), None)
             if not matched:
-                raise ValueError(f"No location matches {requested}.")
+                raise ValueError(f"No site matches {requested}.")
             grouped = {}
             all_dates = set()
             for day in data["days"]:

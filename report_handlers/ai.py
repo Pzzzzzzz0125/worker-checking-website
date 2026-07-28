@@ -168,7 +168,7 @@ def normalize_records(
         status = raw.get("status") if raw.get("status") in {"worked", "off"} else "worked"
         location_values = split_values(raw.get("locations") or [])
         if status == "worked" and not location_values:
-            issues.append("Worked record needs a location.")
+            issues.append("Worked record needs a site.")
         regular = max(float(raw.get("regular_hours") or 0), 0)
         overtime = max(float(raw.get("overtime_hours") or 0), 0)
         total = max(float(raw.get("total_hours") or 0), 0)
@@ -181,9 +181,9 @@ def normalize_records(
         supplied_centers = split_values(raw.get("cost_centers") or [])
         resolved = resolve_centers(centers, supplied_centers)
         if status == "worked" and not resolved:
-            issues.append("Choose the required cost center.")
+            issues.append("Choose the required cost code.")
         elif len(resolved) != len(supplied_centers):
-            issues.append("One or more cost centers need correction.")
+            issues.append("One or more cost codes need correction.")
         warning = normalize_space(str(raw.get("warning") or ""))
         if warning:
             issues.append(warning)
@@ -254,9 +254,9 @@ def apply_records(base: LarkBase, proposed: list[dict]) -> dict:
         location_items = parsed["locations"]
         resolved = resolve_centers(centers, record.get("cost_centers") or [])
         if status == "worked" and not location_items:
-            raise ValueError(f"Row {index}: enter at least one location.")
+            raise ValueError(f"Row {index}: enter at least one site.")
         if status == "worked" and not resolved:
-            raise ValueError(f"Row {index}: choose at least one valid cost center.")
+            raise ValueError(f"Row {index}: choose at least one valid cost code.")
         start_time = str(record.get("start_time") or "")
         end_time = str(record.get("end_time") or "")
         locations = []

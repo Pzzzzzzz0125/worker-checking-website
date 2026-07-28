@@ -133,3 +133,40 @@ export function postJSON<T>(path: string, body: unknown) {
     body: JSON.stringify(body),
   })
 }
+
+export async function downloadJSON(path: string, body: unknown) {
+  activeRequests += 1
+  notifyRequestState()
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      const contentType = response.headers.get("content-type") || ""
+      const errorBody = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text()
+      const message = typeof errorBody === "object" && errorBody && "error" in errorBody
+        ? String(errorBody.error)
+        : `Request failed (${response.status})`
+      throw new ApiError(message, response.status)
+    }
+    const disposition = response.headers.get("content-disposition") || ""
+    const filename = disposition.match(/filename="([^"]+)"/i)?.[1] || "export.xlsx"
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement("a")
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+    return filename
+  } finally {
+    activeRequests = Math.max(0, activeRequests - 1)
+    notifyRequestState()
+  }
+}

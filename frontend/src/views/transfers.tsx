@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  BarChart3,
   Check,
   ExternalLink,
   FileSpreadsheet,
@@ -22,8 +21,9 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { api, postJSON } from "@/lib/api"
-import { displayDate } from "@/lib/utils"
+import { api, downloadJSON, postJSON } from "@/lib/api"
+import type { Bootstrap } from "@/lib/types"
+import { displayDate, localISO } from "@/lib/utils"
 
 type Access = {
   authorized: boolean
@@ -66,7 +66,7 @@ export function ImportView() {
     }
     if (!window.confirm(
       `Import ${preview.counts.work_days.toLocaleString()} work days and ` +
-      `${preview.counts.location_entries.toLocaleString()} location entries?`,
+      `${preview.counts.location_entries.toLocaleString()} site entries?`,
     )) return
     setImporting(true)
     setResult(null)
@@ -113,8 +113,8 @@ export function ImportView() {
   const metrics = preview ? [
     ["Workers", preview.counts.workers],
     ["Work days", preview.counts.work_days],
-    ["Locations", preview.counts.location_entries],
-    ["Cost centers", preview.counts.cost_centers],
+    ["Sites", preview.counts.location_entries],
+    ["Cost codes", preview.counts.cost_centers],
   ] : []
 
   return <div className="page">
@@ -153,7 +153,7 @@ export function ImportView() {
               </Badge>
               <strong>{displayDate(preview.date_range.start, true)} – {displayDate(preview.date_range.end, true)}</strong>
             </div>
-            <p className="mt-2 text-sm">{preview.counts.warnings} entries require review. Historical cost centers remain blank until confirmed.</p>
+            <p className="mt-2 text-sm">{preview.counts.warnings} entries require review. Historical cost codes remain blank until confirmed.</p>
           </div>
         </>}
         {result && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
@@ -165,12 +165,26 @@ export function ImportView() {
   </div>
 }
 
-export function ExportView() {
+export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
+  const today = localISO()
+  const due = new Date(`${today}T12:00:00`)
+  due.setDate(due.getDate() + 30)
   const [access, setAccess] = useState<Access | null>(null)
   const [password, setPassword] = useState("")
   const [unlocking, setUnlocking] = useState(false)
   const [workbook, setWorkbook] = useState<any>(null)
   const [workbookLoading, setWorkbookLoading] = useState(false)
+  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`)
+  const [to, setTo] = useState(today)
+  const [site, setSite] = useState("")
+  const [workerId, setWorkerId] = useState("")
+  const [auditorLoading, setAuditorLoading] = useState(false)
+  const [invoiceLoading, setInvoiceLoading] = useState(false)
+  const [billTo, setBillTo] = useState("")
+  const [invoiceNumber, setInvoiceNumber] = useState(`SC-${today.replaceAll("-", "")}`)
+  const [invoiceDate, setInvoiceDate] = useState(today)
+  const [paymentDue, setPaymentDue] = useState(due.toISOString().slice(0, 10))
+  const [billingRate, setBillingRate] = useState("")
 
   const checkAccess = async () => {
     const value = await api<Access>("/api/export/access")
@@ -216,6 +230,52 @@ export function ExportView() {
     }
   }
 
+  const commonFilters = () => ({
+    from,
+    to,
+    site: site.trim(),
+    worker_id: workerId,
+  })
+
+  const generateAuditor = async () => {
+    if (!from || !to || from > to) return toast.error("Choose a valid From and To date range.")
+    setAuditorLoading(true)
+    try {
+      const filename = await downloadJSON("/api/export/template", {
+        template: "auditor",
+        ...commonFilters(),
+      })
+      toast.success(`${filename} downloaded.`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAuditorLoading(false)
+    }
+  }
+
+  const generateInvoice = async () => {
+    if (!from || !to || from > to) return toast.error("Choose a valid From and To date range.")
+    if (!billTo.trim()) return toast.error("Enter Bill To before generating the invoice.")
+    if (Number(billingRate) <= 0) return toast.error("Enter a billing rate greater than 0.")
+    setInvoiceLoading(true)
+    try {
+      const filename = await downloadJSON("/api/export/template", {
+        template: "invoice",
+        ...commonFilters(),
+        bill_to: billTo,
+        invoice_number: invoiceNumber,
+        invoice_date: invoiceDate,
+        payment_due: paymentDue,
+        billing_rate: Number(billingRate),
+      })
+      toast.success(`${filename} downloaded.`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setInvoiceLoading(false)
+    }
+  }
+
   if (!access) return <AccessLoading label="Checking Export access…" />
   if (!access.authorized) {
     return <div className="page"><div className="mx-auto max-w-lg py-10">
@@ -223,7 +283,7 @@ export function ExportView() {
         <CardHeader>
           <span className="mb-2 grid size-12 place-items-center rounded-xl bg-blue-50 text-primary"><LockKeyhole className="size-6" /></span>
           <CardTitle>Export is password protected</CardTitle>
-          <CardDescription>Schedule spreadsheets and future invoice/report exports require the separate Export password.</CardDescription>
+          <CardDescription>Schedule spreadsheets, auditor reports, and invoices require the separate Export password.</CardDescription>
         </CardHeader>
         <CardContent>
           {access.password_configured ? <form className="grid gap-3" onSubmit={unlock}>
@@ -246,10 +306,10 @@ export function ExportView() {
     <div className="mb-6">
       <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><LockKeyhole className="size-3" />Password protected</div>
       <h1 className="page-title">Export</h1>
-      <p className="page-subtitle">Create controlled schedule files now, with invoice and reporting templates ready to be added later.</p>
+      <p className="page-subtitle">Generate approved Excel templates from a selected date range, site, and worker.</p>
     </div>
-    <div className="grid gap-5 xl:grid-cols-3">
-      <Card className="xl:col-span-2">
+    <div className="grid gap-5">
+      <Card>
         <CardHeader>
           <CardTitle>Connected work-schedule spreadsheet</CardTitle>
           <CardDescription>One Excel-style Lark Sheet with payroll-period tabs, dates across the top, workers down the first column, and complete work blocks in each cell.</CardDescription>
@@ -267,15 +327,59 @@ export function ExportView() {
           <p className="mt-3 text-xs text-muted-foreground">One-way connection: PostgreSQL updates Lark Sheets asynchronously. Direct Sheet edits never overwrite website records.</p>
         </CardContent>
       </Card>
+
       <Card>
-        <CardHeader><CardTitle>Available format</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <ExportType icon={FileSpreadsheet} title="Work schedule" detail="Connected Lark Sheet · ready" ready />
-          <ExportType icon={Receipt} title="Invoice / 发票" detail="Waiting for sample template" />
-          <ExportType icon={BarChart3} title="Report / 汇报" detail="Waiting for sample template" />
-          <ExportType icon={FileText} title="Additional forms" detail="Framework ready for future formats" />
+        <CardHeader>
+          <CardTitle>Work-record filters</CardTitle>
+          <CardDescription>Leave Site or Worker blank to include every matching active worker or site.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="field-label">From<Input type="date" value={from} onChange={event => setFrom(event.target.value)} /></label>
+          <label className="field-label">To<Input type="date" value={to} onChange={event => setTo(event.target.value)} /></label>
+          <label className="field-label">Site<Input list="locations" value={site} onChange={event => setSite(event.target.value)} placeholder="All sites" /></label>
+          <label className="field-label">Worker
+            <select className="h-11 rounded-lg border bg-white px-3 text-sm" value={workerId} onChange={event => setWorkerId(event.target.value)}>
+              <option value="">All active workers</option>
+              {bootstrap.workers.map(worker => <option value={worker.id} key={worker.id}>{worker.name}</option>)}
+            </select>
+          </label>
         </CardContent>
       </Card>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <span className="mb-1 grid size-11 place-items-center rounded-xl bg-blue-50 text-primary"><FileText className="size-5" /></span>
+            <CardTitle>Worker Compensation Auditor Report</CardTitle>
+            <CardDescription>One row per worker, date, site, and cost-code allocation, including start/end time and California regular/OT allocation.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button className="w-full" size="lg" onClick={() => void generateAuditor()} disabled={auditorLoading || invoiceLoading}>
+              {auditorLoading ? <LoaderCircle className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
+              {auditorLoading ? "Generating auditor report…" : "Download auditor report"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <span className="mb-1 grid size-11 place-items-center rounded-xl bg-blue-50 text-primary"><Receipt className="size-5" /></span>
+            <CardTitle>Speed Invoice Template</CardTitle>
+            <CardDescription>The amount is calculated from selected labor hours × the billing rate entered here. Worker salary rates are not used as customer billing rates.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <label className="field-label sm:col-span-2">Bill To<Input value={billTo} onChange={event => setBillTo(event.target.value)} placeholder="Customer or company name" /></label>
+            <label className="field-label">Invoice number<Input value={invoiceNumber} onChange={event => setInvoiceNumber(event.target.value)} /></label>
+            <label className="field-label">Billing rate / labor hour<Input type="number" min="0" step=".01" value={billingRate} onChange={event => setBillingRate(event.target.value)} placeholder="0.00" /></label>
+            <label className="field-label">Invoice date<Input type="date" value={invoiceDate} onChange={event => setInvoiceDate(event.target.value)} /></label>
+            <label className="field-label">Payment due<Input type="date" value={paymentDue} onChange={event => setPaymentDue(event.target.value)} /></label>
+            <Button className="sm:col-span-2" size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading || auditorLoading}>
+              {invoiceLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Receipt className="size-4" />}
+              {invoiceLoading ? "Generating invoice…" : "Download Speed invoice"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   </div>
 }
@@ -293,12 +397,4 @@ function AccessCard({ title, description, detail }: { title: string; description
     </CardHeader>
     <CardContent><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{detail}</div></CardContent>
   </Card></div>
-}
-
-function ExportType({ icon: Icon, title, detail, ready = false }: { icon: typeof FileSpreadsheet; title: string; detail: string; ready?: boolean }) {
-  return <div className="flex items-center gap-3 rounded-xl border p-3">
-    <span className="grid size-9 place-items-center rounded-lg bg-blue-50 text-primary"><Icon className="size-4" /></span>
-    <div className="min-w-0 flex-1"><strong className="block text-sm">{title}</strong><span className="block truncate text-xs text-muted-foreground">{detail}</span></div>
-    <Badge variant={ready ? "success" : "secondary"}>{ready ? "Ready" : "Planned"}</Badge>
-  </div>
 }

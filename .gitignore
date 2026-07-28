@@ -4,6 +4,8 @@ __pycache__/
 data/
 *.xlsx
 *.xlsm
+!templates/
+!templates/*.xlsx
 /*.png
 frontend/node_modules/
 frontend/*.tsbuildinfo

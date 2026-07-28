@@ -327,6 +327,118 @@ def _set_inline_cell(row: ET.Element, reference: str, value: str) -> None:
     text.text = value
 
 
+def _set_number_cell(row: ET.Element, reference: str, value: float) -> None:
+    cells = list(row.findall("m:c", NS))
+    target = next((cell for cell in cells if cell.attrib.get("r") == reference), None)
+    if target is None:
+        target = ET.Element(f"{{{MAIN_NS}}}c", {"r": reference})
+        target_column = column_number(reference)
+        inserted = False
+        for index, cell in enumerate(cells):
+            if column_number(cell.attrib.get("r", "")) > target_column:
+                row.insert(index, target)
+                inserted = True
+                break
+        if not inserted:
+            row.append(target)
+    for child in list(target):
+        target.remove(child)
+    target.attrib.pop("t", None)
+    numeric = ET.SubElement(target, f"{{{MAIN_NS}}}v")
+    numeric.text = f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
+def _worksheet_row(sheet_data: ET.Element, row_number: int) -> ET.Element:
+    existing = next(
+        (
+            row for row in sheet_data.findall("m:row", NS)
+            if int(row.attrib.get("r", "0")) == row_number
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    row = ET.Element(
+        f"{{{MAIN_NS}}}row",
+        {"r": str(row_number), "ht": "18", "customHeight": "1"},
+    )
+    inserted = False
+    rows = list(sheet_data.findall("m:row", NS))
+    for index, current in enumerate(rows):
+        if int(current.attrib.get("r", "0")) > row_number:
+            sheet_data.insert(index, row)
+            inserted = True
+            break
+    if not inserted:
+        sheet_data.append(row)
+    return row
+
+
+def fill_template_workbook(
+    template_path: str | Path,
+    output: io.BytesIO,
+    *,
+    cell_updates: dict[str, dict[str, str | int | float]] | None = None,
+    table_rows: dict[str, list[list[str | int | float]]] | None = None,
+) -> None:
+    """Clone a formatted template and fill fixed cells or append tabular rows."""
+    cell_updates = cell_updates or {}
+    table_rows = table_rows or {}
+    with ZipFile(template_path) as source:
+        replacements: dict[str, bytes] = {}
+        for sheet_name, sheet_path in workbook_sheets(source):
+            updates = cell_updates.get(sheet_name, {})
+            rows_to_append = table_rows.get(sheet_name)
+            if not updates and rows_to_append is None:
+                continue
+            root = ET.fromstring(source.read(sheet_path))
+            sheet_data = root.find("m:sheetData", NS)
+            if sheet_data is None:
+                continue
+            for reference, value in updates.items():
+                match = re.fullmatch(r"([A-Z]+)(\d+)", reference.upper())
+                if not match:
+                    raise ValueError(f"Invalid spreadsheet cell reference: {reference}")
+                row = _worksheet_row(sheet_data, int(match.group(2)))
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    _set_number_cell(row, reference.upper(), float(value))
+                else:
+                    _set_inline_cell(row, reference.upper(), str(value))
+            if rows_to_append is not None:
+                for old_row in list(sheet_data.findall("m:row", NS)):
+                    if int(old_row.attrib.get("r", "0")) > 1:
+                        sheet_data.remove(old_row)
+                for row_number, values in enumerate(rows_to_append, start=2):
+                    row = _worksheet_row(sheet_data, row_number)
+                    for column, value in enumerate(values, start=1):
+                        reference = f"{column_letters(column)}{row_number}"
+                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                            _set_number_cell(row, reference, float(value))
+                        else:
+                            _set_inline_cell(row, reference, str(value))
+                last_row = max(1, len(rows_to_append) + 1)
+                dimension = root.find("m:dimension", NS)
+                if dimension is not None:
+                    dimension.attrib["ref"] = f"A1:I{last_row}"
+                for old_filter in root.findall("m:autoFilter", NS):
+                    root.remove(old_filter)
+                auto_filter = ET.Element(
+                    f"{{{MAIN_NS}}}autoFilter",
+                    {"ref": f"A1:I{last_row}"},
+                )
+                root.insert(list(root).index(sheet_data) + 1, auto_filter)
+            root.attrib.pop(f"{{{MC_NS}}}Ignorable", None)
+            root.attrib.pop(f"{{{XR_NS}}}uid", None)
+            replacements[sheet_path] = ET.tostring(
+                root, encoding="utf-8", xml_declaration=True
+            )
+        with ZipFile(output, "w", ZIP_DEFLATED) as destination:
+            for item in source.infolist():
+                destination.writestr(
+                    item, replacements.get(item.filename, source.read(item.filename))
+                )
+
+
 def update_workbook(
     template_path: str | Path,
     output: io.BytesIO,

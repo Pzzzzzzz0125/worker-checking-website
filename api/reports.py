@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 from api._shared import json_response
 from report_handlers.entries import handler as EntryHandler
+from report_handlers.exports import handler as ExportHandler
 from report_handlers.ai import handler as AiHandler
 from report_handlers.database import handler as DatabaseHandler
 from report_handlers.data_access import handler as DataAccessHandler
@@ -64,6 +65,9 @@ class handler(BaseHTTPRequestHandler):
             return
         if self.action() == "export_unlock":
             DataAccessHandler.do_POST(self)
+            return
+        if self.action() == "export_template":
+            ExportHandler.do_POST(self)
             return
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)

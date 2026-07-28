@@ -7,7 +7,8 @@
       "maxDuration": 300
     },
     "api/reports.py": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "templates/*.xlsx"
     }
   },
   "rewrites": [
@@ -38,6 +39,10 @@
     {
       "source": "/api/export/unlock",
       "destination": "/api/reports?action=export_unlock"
+    },
+    {
+      "source": "/api/export/template",
+      "destination": "/api/reports?action=export_template"
     },
     {
       "source": "/api/payroll/access",

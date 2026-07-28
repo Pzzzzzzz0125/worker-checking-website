@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button"
 import type { LarkSyncStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-export type View = "overview" | "payroll" | "locations" | "ai" | "daily" | "worker" | "workers" | "import" | "export"
+export type View = "overview" | "payroll" | "sites" | "ai" | "daily" | "worker" | "workers" | "import" | "export"
 const groups: { label: string; items: { id: View; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { label: "Check", items: [
-    { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "locations", label: "Locations", icon: MapPin },
+    { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "sites", label: "Sites", icon: MapPin },
   ]},
   { label: "Record", items: [
     { id: "ai", label: "AI reading", icon: BrainCircuit }, { id: "daily", label: "Daily entry", icon: CalendarDays }, { id: "worker", label: "Worker entry", icon: UserRound },

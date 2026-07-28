@@ -246,7 +246,7 @@ def access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dic
 
 
 def payroll_access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dict:
-    """Payroll and location costs share one read-sensitive permission scope."""
+    """Payroll and site costs share one read-sensitive permission scope."""
     is_lark_admin = current_session.get("sub") in admin_ids()
     password_session = verify_payload(
         cookie_value(handler, "payroll_access_session"), 8 * 60 * 60,
@@ -275,7 +275,7 @@ def require_payroll_access(handler: BaseHTTPRequestHandler) -> bool:
     json_response(
         handler,
         {
-            "error": "Payroll and Location Check require authorized access.",
+            "error": "Payroll and Site Check require authorized access.",
             "code": "payroll_access_required",
             **access,
         },
