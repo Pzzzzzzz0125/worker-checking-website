@@ -181,12 +181,8 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [workbookLoading, setWorkbookLoading] = useState(false)
   const [auditorFrom, setAuditorFrom] = useState(`${today.slice(0, 7)}-01`)
   const [auditorTo, setAuditorTo] = useState(today)
-  const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(
-    () => new Set(bootstrap.workers.map(worker => String(worker.id))),
-  )
-  const [auditorSites, setAuditorSites] = useState<Set<string>>(
-    () => new Set(bootstrap.locations),
-  )
+  const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(new Set())
+  const [auditorSites, setAuditorSites] = useState<Set<string>>(new Set())
   const [invoiceFrom, setInvoiceFrom] = useState(`${today.slice(0, 7)}-01`)
   const [invoiceTo, setInvoiceTo] = useState(today)
   const [invoiceSite, setInvoiceSite] = useState("")
@@ -241,6 +237,10 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   }
 
   const openMode = async (nextMode: "schedule" | "auditor" | "invoice") => {
+    if (nextMode === "auditor") {
+      setAuditorWorkers(new Set())
+      setAuditorSites(new Set())
+    }
     setMode(nextMode)
     if (nextMode !== "schedule" || workbook) return
     setWorkbookLoading(true)
