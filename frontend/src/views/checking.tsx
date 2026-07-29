@@ -20,11 +20,13 @@ type OverviewCacheEntry = {
   mutationVersion: number
 }
 const overviewCache = new Map<string, OverviewCacheEntry>()
+type OverviewPreset = "7" | "month" | "pay1" | "pay2"
 
 export function OverviewView({ bootstrap }: { bootstrap: Bootstrap }) {
   const today = localISO()
   const [from, setFrom] = useState(`${today.slice(0,7)}-01`)
   const [to, setTo] = useState(today)
+  const [selectedPreset, setSelectedPreset] = useState<OverviewPreset | null>("month")
   const [worker, setWorker] = useState("")
   const [search, setSearch] = useState("")
   const [data, setData] = useState<Summary | null>(null)
@@ -59,12 +61,12 @@ export function OverviewView({ bootstrap }: { bootstrap: Bootstrap }) {
     }
   }
   useEffect(() => { void load() }, [])
-  const setPreset = (kind: "7"|"month"|"pay1"|"pay2") => { const now = new Date(); const y=now.getFullYear(), m=now.getMonth(); if(kind==="7") { const s=new Date(now); s.setDate(s.getDate()-6); setFrom(localISO(s)); setTo(today) } else if(kind==="month") { setFrom(`${today.slice(0,7)}-01`); setTo(today) } else { const last = new Date(y, m + 1, 0); setFrom(localISO(new Date(y,m,kind==="pay1"?1:16))); setTo(localISO(kind==="pay1" ? new Date(y,m,15) : last)) } }
+  const setPreset = (kind: OverviewPreset) => { const now = new Date(); const y=now.getFullYear(), m=now.getMonth(); setSelectedPreset(kind); if(kind==="7") { const s=new Date(now); s.setDate(s.getDate()-6); setFrom(localISO(s)); setTo(today) } else if(kind==="month") { setFrom(`${today.slice(0,7)}-01`); setTo(today) } else { const last = new Date(y, m + 1, 0); setFrom(localISO(new Date(y,m,kind==="pay1"?1:16))); setTo(localISO(kind==="pay1" ? new Date(y,m,15) : last)) } }
   const visible = (data?.records || []).filter(record =>
     `${record.worker_name} ${record.work_date} ${record.status}`.toLowerCase().includes(search.toLowerCase())
   )
   return <div className="page"><PageIntro title="Workforce overview" text="A quick summary of the selected work period." />
-    <Card className="mb-5"><CardContent className="grid gap-3 !pt-5 lg:grid-cols-[1fr_1fr_1.3fr_auto]"><label className="field-label">From<Input type="date" value={from} onChange={e=>setFrom(e.target.value)} /></label><label className="field-label">To<Input type="date" value={to} onChange={e=>setTo(e.target.value)} /></label><label className="field-label">Worker<Input list="workers" value={worker} onChange={e=>setWorker(e.target.value)} placeholder="All workers" /></label><Button className="self-end" disabled={loading} onClick={()=>void load(true)}>{loading?<LoaderCircle className="size-4 animate-spin"/>:<Search className="size-4"/>}{loading?"Loading…":"Apply"}</Button><div className="flex flex-wrap gap-2 lg:col-span-4">{[["7","Last 7 days"],["month","This month"],["pay1","1–15"],["pay2","16–end"]].map(([id,label])=><Button size="sm" variant="ghost" key={id} onClick={()=>setPreset(id as never)}>{label}</Button>)}</div></CardContent></Card>
+    <Card className="mb-5"><CardContent className="grid gap-3 !pt-5 lg:grid-cols-[1fr_1fr_1.3fr_auto]"><label className="field-label">From<Input type="date" value={from} onChange={e=>{setFrom(e.target.value);setSelectedPreset(null)}} /></label><label className="field-label">To<Input type="date" value={to} onChange={e=>{setTo(e.target.value);setSelectedPreset(null)}} /></label><label className="field-label">Worker<Input list="workers" value={worker} onChange={e=>setWorker(e.target.value)} placeholder="All workers" /></label><Button className="self-end" disabled={loading} onClick={()=>void load(true)}>{loading?<LoaderCircle className="size-4 animate-spin"/>:<Search className="size-4"/>}{loading?"Loading…":"Apply"}</Button><div className="flex flex-wrap gap-2 lg:col-span-4">{([["7","Last 7 days"],["month","This month"],["pay1","1–15"],["pay2","16–end"]] as [OverviewPreset,string][]).map(([id,label])=><Button size="sm" variant={selectedPreset===id?"default":"ghost"} aria-pressed={selectedPreset===id} key={id} onClick={()=>setPreset(id)}>{selectedPreset===id&&<Check className="size-3.5"/>}{label}</Button>)}</div></CardContent></Card>
     {loading && !data ? <div className="metric-grid mb-5">{[1,2,3,4].map(x=><Skeleton className="h-28" key={x}/>)}</div> : <>
       <div className="metric-grid mb-5"><Metric icon={Clock3} label="Total hours" value={compactNumber(data?.totals.hours)} /><Metric icon={Users} label="Active workers" value={compactNumber(data?.totals.active_workers,0)} /><Metric icon={CalendarRange} label="Worked days" value={compactNumber(data?.totals.worked_days,0)} /><Metric icon={Clock3} label="Overtime" value={`${compactNumber(data?.totals.overtime_hours)}h`} /></div>
       <Card className="mb-5"><CardHeader className="!flex-row items-center justify-between"><div><CardTitle>Period summary</CardTitle><CardDescription>{data ? `${displayDate(data.range.from,true)} – ${displayDate(data.range.to,true)}` : ""}</CardDescription></div><Button size="sm" variant="outline" disabled={loading} onClick={()=>void load(true)}><RefreshCw className={`size-4 ${loading?"animate-spin":""}`}/>Refresh</Button></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["Regular hours",`${compactNumber(data?.totals.regular_hours)}h`],["Average workday",`${compactNumber(data?.totals.average_hours)}h`],["Off records",compactNumber(data?.totals.off_days,0)],["Extra pay",`$${compactNumber(data?.totals.extra_pay)}`],["Latest activity",data?.totals.last_worked_date?displayDate(data.totals.last_worked_date,true):"—"]].map(([label,value])=><div className="rounded-xl border bg-slate-50 p-4" key={label}><p className="text-xs font-semibold text-muted-foreground">{label}</p><strong className="mt-1 block text-lg">{value}</strong></div>)}</div></CardContent></Card>
