@@ -181,8 +181,12 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [workbookLoading, setWorkbookLoading] = useState(false)
   const [auditorFrom, setAuditorFrom] = useState(`${today.slice(0, 7)}-01`)
   const [auditorTo, setAuditorTo] = useState(today)
-  const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(new Set())
-  const [auditorSites, setAuditorSites] = useState<Set<string>>(new Set())
+  const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(
+    () => new Set(bootstrap.workers.map(worker => String(worker.id))),
+  )
+  const [auditorSites, setAuditorSites] = useState<Set<string>>(
+    () => new Set(bootstrap.locations),
+  )
   const [invoiceFrom, setInvoiceFrom] = useState(`${today.slice(0, 7)}-01`)
   const [invoiceTo, setInvoiceTo] = useState(today)
   const [invoiceSite, setInvoiceSite] = useState("")
@@ -251,6 +255,8 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
 
   const generateAuditor = async () => {
     if (!auditorFrom || !auditorTo || auditorFrom > auditorTo) return toast.error("Choose a valid From and To date range.")
+    if (!auditorWorkers.size) return toast.error("Select at least one worker.")
+    if (!auditorSites.size) return toast.error("Select at least one site.")
     setAuditorLoading(true)
     try {
       const filename = await downloadJSON("/api/export/template", {
@@ -349,10 +355,10 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
         <label className="field-label">To<Input type="date" value={auditorTo} onChange={event => setAuditorTo(event.target.value)} /></label>
       </CardContent></Card>
       <div className="grid gap-5 xl:grid-cols-2">
-        <MultiSelectList title="2. Workers" icon={Users} allLabel="All active workers" items={bootstrap.workers.map(worker => ({ id: String(worker.id), label: worker.name }))} selected={auditorWorkers} onChange={setAuditorWorkers} placeholder="Search workers…" />
-        <MultiSelectList title="3. Sites" icon={MapPin} allLabel="All sites" items={bootstrap.locations.map(site => ({ id: site, label: site }))} selected={auditorSites} onChange={setAuditorSites} placeholder="Search sites…" />
+        <MultiSelectList title="2. Workers" icon={Users} items={bootstrap.workers.map(worker => ({ id: String(worker.id), label: worker.name }))} selected={auditorWorkers} onChange={setAuditorWorkers} placeholder="Search workers…" />
+        <MultiSelectList title="3. Sites" icon={MapPin} items={bootstrap.locations.map(site => ({ id: site, label: site }))} selected={auditorSites} onChange={setAuditorSites} placeholder="Search sites…" />
       </div>
-      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Ready to generate</strong><p className="text-sm text-muted-foreground">{auditorWorkers.size || "All"} worker{auditorWorkers.size===1?"":"s"} · {auditorSites.size || "All"} site{auditorSites.size===1?"":"s"} · {displayDate(auditorFrom,true)} – {displayDate(auditorTo,true)}</p></div><Button size="lg" onClick={() => void generateAuditor()} disabled={auditorLoading}>{auditorLoading?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{auditorLoading?"Generating auditor report…":"Download auditor report"}</Button></CardContent></Card>
+      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">{auditorWorkers.size&&auditorSites.size?"Ready to generate":"Complete the selection"}</strong><p className="text-sm text-muted-foreground">{auditorWorkers.size} worker{auditorWorkers.size===1?"":"s"} · {auditorSites.size} site{auditorSites.size===1?"":"s"} · {displayDate(auditorFrom,true)} – {displayDate(auditorTo,true)}</p></div><Button size="lg" onClick={() => void generateAuditor()} disabled={auditorLoading||!auditorWorkers.size||!auditorSites.size}>{auditorLoading?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{auditorLoading?"Generating auditor report…":"Download auditor report"}</Button></CardContent></Card>
     </div>
   </div>
 
@@ -386,16 +392,16 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   </div>
 }
 
-function MultiSelectList({ title, icon: Icon, allLabel, items, selected, onChange, placeholder }: { title: string; icon: typeof Users; allLabel: string; items: { id: string; label: string }[]; selected: Set<string>; onChange: (value: Set<string>) => void; placeholder: string }) {
+function MultiSelectList({ title, icon: Icon, items, selected, onChange, placeholder }: { title: string; icon: typeof Users; items: { id: string; label: string }[]; selected: Set<string>; onChange: (value: Set<string>) => void; placeholder: string }) {
   const [search, setSearch] = useState("")
   const visible = items.filter(item => item.label.toLowerCase().includes(search.toLowerCase()))
   const toggle = (id: string) => { const next = new Set(selected); next.has(id) ? next.delete(id) : next.add(id); onChange(next) }
-  const selectVisible = () => onChange(new Set([...selected, ...visible.map(item => item.id)]))
-  return <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><span className="mb-2 grid size-10 place-items-center rounded-xl bg-blue-50 text-primary"><Icon className="size-5" /></span><CardTitle>{title}</CardTitle><CardDescription>{selected.size ? `${selected.size} selected` : allLabel}</CardDescription></div>{selected.size>0&&<Button size="sm" variant="ghost" onClick={() => onChange(new Set())}>Use all</Button>}</div></CardHeader><CardContent className="grid gap-3">
+  const allSelected = items.length > 0 && selected.size === items.length
+  const toggleAll = () => onChange(allSelected ? new Set() : new Set(items.map(item => item.id)))
+  return <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><span className="mb-2 grid size-10 place-items-center rounded-xl bg-blue-50 text-primary"><Icon className="size-5" /></span><CardTitle>{title}</CardTitle><CardDescription>{selected.size} of {items.length} selected</CardDescription></div><Button size="sm" variant={allSelected?"outline":"default"} onClick={toggleAll}>{allSelected?"Clear all":"Select all"}</Button></div></CardHeader><CardContent className="grid gap-3">
     <Input value={search} onChange={event => setSearch(event.target.value)} placeholder={placeholder} />
-    <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{visible.length} shown</span><Button size="sm" variant="ghost" onClick={selectVisible}>Select shown</Button></div>
     <div className="max-h-64 overflow-y-auto rounded-xl border">
-      {visible.map(item => <label className="flex cursor-pointer items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0 hover:bg-slate-50" key={item.id}><input type="checkbox" className="size-4 accent-[#2563eb]" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /><span>{item.label}</span></label>)}
+      {visible.map(item => <label className={`flex cursor-pointer items-center gap-3 border-b px-3 py-2.5 text-sm transition-colors last:border-b-0 ${selected.has(item.id)?"bg-blue-50 font-semibold text-blue-950 hover:bg-blue-100":"hover:bg-slate-50"}`} key={item.id}><input type="checkbox" className="size-4 accent-[#2563eb]" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /><span>{item.label}</span></label>)}
       {!visible.length&&<p className="p-6 text-center text-sm text-muted-foreground">No matches.</p>}
     </div>
   </CardContent></Card>

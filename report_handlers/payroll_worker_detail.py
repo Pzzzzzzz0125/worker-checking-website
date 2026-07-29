@@ -10,6 +10,28 @@ from api._reports import aggregate, california_overtime, load_report_data, repor
 from api._shared import cookie_value, json_response, verify_payload
 
 
+def aggregate_with_estimated_cost(
+    days: list[dict], field_name: str, daily_rate: float,
+) -> list[dict]:
+    rows = aggregate(days, field_name)
+    costs: dict[str, float] = {}
+    for day in days:
+        actual_hours = max(float(day.get("total_hours") or 0), 0.0)
+        if not actual_hours:
+            continue
+        labor_cost = float(day.get("weighted_hours") or actual_hours) * daily_rate / 8.0
+        for item in day[field_name]:
+            key = item.get("id") or item.get("name", "").casefold()
+            if key:
+                costs[key] = costs.get(key, 0.0) + (
+                    labor_cost * float(item.get("hours") or 0) / actual_hours
+                )
+    for row in rows:
+        key = row.get("id") or row.get("name", "").casefold()
+        row["estimated_cost"] = round(costs.get(key, 0.0), 2)
+    return rows
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not verify_payload(cookie_value(self, "workforce_session"), 12 * 60 * 60):
@@ -60,8 +82,12 @@ class handler(BaseHTTPRequestHandler):
                         "estimated_salary": round(sum(item["estimated_salary"] for item in selected), 2),
                     },
                     "days": selected,
-                    "locations": aggregate(selected, "locations"),
-                    "cost_centers": aggregate(selected, "cost_centers"),
+                    "locations": aggregate_with_estimated_cost(
+                        selected, "locations", worker["daily_rate"],
+                    ),
+                    "cost_centers": aggregate_with_estimated_cost(
+                        selected, "cost_centers", worker["daily_rate"],
+                    ),
                 },
             )
         except (ValueError, LarkAPIError) as error:

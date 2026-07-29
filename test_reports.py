@@ -8,6 +8,7 @@ from report_handlers.location_detail import (
     build_worker_site_detail,
     handler as LocationDetailHandler,
 )
+from report_handlers.payroll_worker_detail import aggregate_with_estimated_cost
 
 
 class ReportTests(unittest.TestCase):
@@ -134,6 +135,24 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result["totals"]["weighted_hours"], 5.5)
         self.assertEqual(result["totals"]["estimated_cost"], 220)
         self.assertEqual(result["days"][0]["cost_centers"][0]["id"], "100")
+
+    def test_payroll_detail_allocates_estimated_cost_by_recorded_hours(self):
+        rows = aggregate_with_estimated_cost(
+            [{
+                "date": "2026-07-01",
+                "worker_key": "1",
+                "total_hours": 10,
+                "weighted_hours": 11,
+                "locations": [
+                    {"name": "Site A", "hours": 5},
+                    {"name": "Site B", "hours": 5},
+                ],
+            }],
+            "locations",
+            320,
+        )
+        self.assertEqual(rows[0]["estimated_cost"], 220)
+        self.assertEqual(rows[1]["estimated_cost"], 220)
 
 
 if __name__ == "__main__":
