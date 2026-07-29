@@ -262,11 +262,14 @@ date, location, or required cost center blocks that proposal.
   eight hours.
 - The connected **Speed Construction Work Schedule** remains available as the
   one-way Lark spreadsheet mirror.
-- **Worker Compensation Auditor Report** accepts From/To dates plus optional
-  Site and Worker filters. It exports one row per worker/date/site/cost-code
-  allocation, with recorded time, total hours, and California regular/OT
-  allocation.
-- **Speed Invoice Template** uses the same work filters and asks for Bill To,
+- Export first opens a document chooser; the connected schedule, auditor
+  report, and invoice each have an independent configuration page.
+- **Worker Compensation Auditor Report** accepts From/To dates plus searchable
+  multi-select Worker and Site filters. An empty selection means all; otherwise
+  only checked workers/sites are included. It exports one row per
+  worker/date/site/cost-code allocation, with recorded time, total hours, and
+  California regular/OT allocation.
+- **Speed Invoice Template** has its own work filters and asks for Bill To,
   invoice number/date, payment due, and customer billing rate. The amount is
   selected labor hours multiplied by this billing rate. Worker payroll rates
   are intentionally never treated as customer billing rates.
@@ -676,7 +679,7 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-At this handoff, the Python suite contains **62 tests** with one workbook test
+At this handoff, the Python suite contains **63 tests** with one workbook test
 skipped when the private payroll reference workbook is not present.
 
 Before merging a change:

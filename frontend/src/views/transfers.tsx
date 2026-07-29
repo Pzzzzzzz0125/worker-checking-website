@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react"
 import {
+  ArrowLeft,
   Check,
+  ChevronRight,
   ExternalLink,
   FileSpreadsheet,
   FileText,
   LoaderCircle,
   LockKeyhole,
+  MapPin,
   Receipt,
   ShieldCheck,
   Upload,
+  Users,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -169,15 +173,20 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const today = localISO()
   const due = new Date(`${today}T12:00:00`)
   due.setDate(due.getDate() + 30)
+  const [mode, setMode] = useState<"schedule" | "auditor" | "invoice" | null>(null)
   const [access, setAccess] = useState<Access | null>(null)
   const [password, setPassword] = useState("")
   const [unlocking, setUnlocking] = useState(false)
   const [workbook, setWorkbook] = useState<any>(null)
   const [workbookLoading, setWorkbookLoading] = useState(false)
-  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`)
-  const [to, setTo] = useState(today)
-  const [site, setSite] = useState("")
-  const [workerId, setWorkerId] = useState("")
+  const [auditorFrom, setAuditorFrom] = useState(`${today.slice(0, 7)}-01`)
+  const [auditorTo, setAuditorTo] = useState(today)
+  const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(new Set())
+  const [auditorSites, setAuditorSites] = useState<Set<string>>(new Set())
+  const [invoiceFrom, setInvoiceFrom] = useState(`${today.slice(0, 7)}-01`)
+  const [invoiceTo, setInvoiceTo] = useState(today)
+  const [invoiceSite, setInvoiceSite] = useState("")
+  const [invoiceWorkerId, setInvoiceWorkerId] = useState("")
   const [auditorLoading, setAuditorLoading] = useState(false)
   const [invoiceLoading, setInvoiceLoading] = useState(false)
   const [billTo, setBillTo] = useState("")
@@ -189,9 +198,6 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const checkAccess = async () => {
     const value = await api<Access>("/api/export/access")
     setAccess(value)
-    if (value.authorized) {
-      setWorkbook(await api<any>("/api/lark/workbook"))
-    }
   }
   useEffect(() => {
     void checkAccess().catch(error =>
@@ -230,20 +236,29 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
     }
   }
 
-  const commonFilters = () => ({
-    from,
-    to,
-    site: site.trim(),
-    worker_id: workerId,
-  })
+  const openMode = async (nextMode: "schedule" | "auditor" | "invoice") => {
+    setMode(nextMode)
+    if (nextMode !== "schedule" || workbook) return
+    setWorkbookLoading(true)
+    try {
+      setWorkbook(await api<any>("/api/lark/workbook"))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkbookLoading(false)
+    }
+  }
 
   const generateAuditor = async () => {
-    if (!from || !to || from > to) return toast.error("Choose a valid From and To date range.")
+    if (!auditorFrom || !auditorTo || auditorFrom > auditorTo) return toast.error("Choose a valid From and To date range.")
     setAuditorLoading(true)
     try {
       const filename = await downloadJSON("/api/export/template", {
         template: "auditor",
-        ...commonFilters(),
+        from: auditorFrom,
+        to: auditorTo,
+        worker_ids: Array.from(auditorWorkers),
+        sites: Array.from(auditorSites),
       })
       toast.success(`${filename} downloaded.`)
     } catch (error) {
@@ -254,14 +269,17 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   }
 
   const generateInvoice = async () => {
-    if (!from || !to || from > to) return toast.error("Choose a valid From and To date range.")
+    if (!invoiceFrom || !invoiceTo || invoiceFrom > invoiceTo) return toast.error("Choose a valid From and To date range.")
     if (!billTo.trim()) return toast.error("Enter Bill To before generating the invoice.")
     if (Number(billingRate) <= 0) return toast.error("Enter a billing rate greater than 0.")
     setInvoiceLoading(true)
     try {
       const filename = await downloadJSON("/api/export/template", {
         template: "invoice",
-        ...commonFilters(),
+        from: invoiceFrom,
+        to: invoiceTo,
+        site: invoiceSite.trim(),
+        worker_id: invoiceWorkerId,
         bill_to: billTo,
         invoice_number: invoiceNumber,
         invoice_date: invoiceDate,
@@ -302,86 +320,89 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
     </div></div>
   }
 
-  return <div className="page">
-    <div className="mb-6">
-      <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><LockKeyhole className="size-3" />Password protected</div>
-      <h1 className="page-title">Export</h1>
-      <p className="page-subtitle">Generate approved Excel templates from a selected date range, site, and worker.</p>
-    </div>
-    <div className="grid gap-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Connected work-schedule spreadsheet</CardTitle>
-          <CardDescription>One Excel-style Lark Sheet with payroll-period tabs, dates across the top, workers down the first column, and complete work blocks in each cell.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={configureWorkbook} disabled={workbookLoading}>
-              {workbookLoading ? <LoaderCircle className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
-              {workbookLoading ? "Building spreadsheet…" : workbook?.configured ? "Refresh spreadsheet" : "Create connected spreadsheet"}
-            </Button>
-            {workbook?.url && <a className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-4 text-sm font-semibold hover:bg-muted" href={workbook.url} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-4" />Open in Lark
-            </a>}
-          </div>
-          <p className="mt-3 text-xs text-muted-foreground">One-way connection: PostgreSQL updates Lark Sheets asynchronously. Direct Sheet edits never overwrite website records.</p>
-        </CardContent>
-      </Card>
+  const header = (title: string, description: string) => <div className="mb-6">
+    <Button variant="ghost" className="mb-3 -ml-3" onClick={() => setMode(null)}><ArrowLeft className="size-4" />Back to export options</Button>
+    <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><LockKeyhole className="size-3" />Password protected</div>
+    <h1 className="page-title">{title}</h1>
+    <p className="page-subtitle">{description}</p>
+  </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Work-record filters</CardTitle>
-          <CardDescription>Leave Site or Worker blank to include every matching active worker or site.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label className="field-label">From<Input type="date" value={from} onChange={event => setFrom(event.target.value)} /></label>
-          <label className="field-label">To<Input type="date" value={to} onChange={event => setTo(event.target.value)} /></label>
-          <label className="field-label">Site<Input list="locations" value={site} onChange={event => setSite(event.target.value)} placeholder="All sites" /></label>
-          <label className="field-label">Worker
-            <select className="h-11 rounded-lg border bg-white px-3 text-sm" value={workerId} onChange={event => setWorkerId(event.target.value)}>
-              <option value="">All active workers</option>
-              {bootstrap.workers.map(worker => <option value={worker.id} key={worker.id}>{worker.name}</option>)}
-            </select>
-          </label>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <span className="mb-1 grid size-11 place-items-center rounded-xl bg-blue-50 text-primary"><FileText className="size-5" /></span>
-            <CardTitle>Worker Compensation Auditor Report</CardTitle>
-            <CardDescription>One row per worker, date, site, and cost-code allocation, including start/end time and California regular/OT allocation.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button className="w-full" size="lg" onClick={() => void generateAuditor()} disabled={auditorLoading || invoiceLoading}>
-              {auditorLoading ? <LoaderCircle className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
-              {auditorLoading ? "Generating auditor report…" : "Download auditor report"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <span className="mb-1 grid size-11 place-items-center rounded-xl bg-blue-50 text-primary"><Receipt className="size-5" /></span>
-            <CardTitle>Speed Invoice Template</CardTitle>
-            <CardDescription>The amount is calculated from selected labor hours × the billing rate entered here. Worker salary rates are not used as customer billing rates.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
-            <label className="field-label sm:col-span-2">Bill To<Input value={billTo} onChange={event => setBillTo(event.target.value)} placeholder="Customer or company name" /></label>
-            <label className="field-label">Invoice number<Input value={invoiceNumber} onChange={event => setInvoiceNumber(event.target.value)} /></label>
-            <label className="field-label">Billing rate / labor hour<Input type="number" min="0" step=".01" value={billingRate} onChange={event => setBillingRate(event.target.value)} placeholder="0.00" /></label>
-            <label className="field-label">Invoice date<Input type="date" value={invoiceDate} onChange={event => setInvoiceDate(event.target.value)} /></label>
-            <label className="field-label">Payment due<Input type="date" value={paymentDue} onChange={event => setPaymentDue(event.target.value)} /></label>
-            <Button className="sm:col-span-2" size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading || auditorLoading}>
-              {invoiceLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Receipt className="size-4" />}
-              {invoiceLoading ? "Generating invoice…" : "Download Speed invoice"}
-            </Button>
-          </CardContent>
-        </Card>
+  if (mode === "schedule") return <div className="page">
+    {header("Connected work-schedule spreadsheet", "Open or refresh the one-way Lark spreadsheet mirror.")}
+    <Card><CardHeader><CardTitle>Speed Construction Work Schedule</CardTitle><CardDescription>Payroll-period tabs, dates across the top, workers down the first column, and normalized work blocks in each cell.</CardDescription></CardHeader><CardContent>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button onClick={configureWorkbook} disabled={workbookLoading}>
+          {workbookLoading ? <LoaderCircle className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
+          {workbookLoading ? "Loading spreadsheet…" : workbook?.configured ? "Refresh spreadsheet" : "Create connected spreadsheet"}
+        </Button>
+        {workbook?.url && <a className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-4 text-sm font-semibold hover:bg-muted" href={workbook.url} target="_blank" rel="noreferrer"><ExternalLink className="size-4" />Open in Lark</a>}
       </div>
+      <p className="mt-3 text-xs text-muted-foreground">PostgreSQL remains authoritative. Direct Sheet edits never overwrite website records.</p>
+    </CardContent></Card>
+  </div>
+
+  if (mode === "auditor") return <div className="page">
+    {header("Worker Compensation Auditor Report", "Choose the reporting period and any combination of workers and sites.")}
+    <div className="grid gap-5">
+      <Card><CardHeader><CardTitle>1. Reporting period</CardTitle><CardDescription>Both dates are included in the report.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label">From<Input type="date" value={auditorFrom} onChange={event => setAuditorFrom(event.target.value)} /></label>
+        <label className="field-label">To<Input type="date" value={auditorTo} onChange={event => setAuditorTo(event.target.value)} /></label>
+      </CardContent></Card>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <MultiSelectList title="2. Workers" icon={Users} allLabel="All active workers" items={bootstrap.workers.map(worker => ({ id: String(worker.id), label: worker.name }))} selected={auditorWorkers} onChange={setAuditorWorkers} placeholder="Search workers…" />
+        <MultiSelectList title="3. Sites" icon={MapPin} allLabel="All sites" items={bootstrap.locations.map(site => ({ id: site, label: site }))} selected={auditorSites} onChange={setAuditorSites} placeholder="Search sites…" />
+      </div>
+      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Ready to generate</strong><p className="text-sm text-muted-foreground">{auditorWorkers.size || "All"} worker{auditorWorkers.size===1?"":"s"} · {auditorSites.size || "All"} site{auditorSites.size===1?"":"s"} · {displayDate(auditorFrom,true)} – {displayDate(auditorTo,true)}</p></div><Button size="lg" onClick={() => void generateAuditor()} disabled={auditorLoading}>{auditorLoading?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{auditorLoading?"Generating auditor report…":"Download auditor report"}</Button></CardContent></Card>
     </div>
   </div>
+
+  if (mode === "invoice") return <div className="page">
+    {header("Speed Invoice Template", "Complete the invoice-specific fields. This form can be refined independently when the final invoice rules are confirmed.")}
+    <div className="grid gap-5">
+      <Card><CardHeader><CardTitle>Work to include</CardTitle><CardDescription>Invoice currently supports one worker and one site, or all records when left blank.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label">From<Input type="date" value={invoiceFrom} onChange={event => setInvoiceFrom(event.target.value)} /></label>
+        <label className="field-label">To<Input type="date" value={invoiceTo} onChange={event => setInvoiceTo(event.target.value)} /></label>
+        <label className="field-label">Site<Input list="locations" value={invoiceSite} onChange={event => setInvoiceSite(event.target.value)} placeholder="All sites" /></label>
+        <label className="field-label">Worker<select className="h-11 rounded-lg border bg-white px-3 text-sm" value={invoiceWorkerId} onChange={event => setInvoiceWorkerId(event.target.value)}><option value="">All active workers</option>{bootstrap.workers.map(worker => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select></label>
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>Invoice details</CardTitle><CardDescription>Amount = selected labor hours × billing rate. Worker salary rates are never used as customer billing rates.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label sm:col-span-2">Bill To<Input value={billTo} onChange={event => setBillTo(event.target.value)} placeholder="Customer or company name" /></label>
+        <label className="field-label">Invoice number<Input value={invoiceNumber} onChange={event => setInvoiceNumber(event.target.value)} /></label>
+        <label className="field-label">Billing rate / labor hour<Input type="number" min="0" step=".01" value={billingRate} onChange={event => setBillingRate(event.target.value)} placeholder="0.00" /></label>
+        <label className="field-label">Invoice date<Input type="date" value={invoiceDate} onChange={event => setInvoiceDate(event.target.value)} /></label>
+        <label className="field-label">Payment due<Input type="date" value={paymentDue} onChange={event => setPaymentDue(event.target.value)} /></label>
+        <Button className="sm:col-span-2" size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading}>{invoiceLoading?<LoaderCircle className="size-4 animate-spin"/>:<Receipt className="size-4" />}{invoiceLoading?"Generating invoice…":"Download Speed invoice"}</Button>
+      </CardContent></Card>
+    </div>
+  </div>
+
+  return <div className="page">
+    <div className="mb-6"><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><LockKeyhole className="size-3" />Password protected</div><h1 className="page-title">Export</h1><p className="page-subtitle">Choose a document. Each export has its own fields and selection rules.</p></div>
+    <div className="grid gap-5 lg:grid-cols-3">
+      <ExportChoice icon={FileSpreadsheet} title="Work schedule spreadsheet" detail="Open or refresh the connected Lark work schedule." action="Open spreadsheet" onClick={() => void openMode("schedule")} />
+      <ExportChoice icon={FileText} title="Worker Compensation Auditor Report" detail="Select a date range, multiple workers, and multiple sites." action="Configure report" onClick={() => void openMode("auditor")} />
+      <ExportChoice icon={Receipt} title="Speed Invoice Template" detail="Complete invoice-specific work and billing information." action="Configure invoice" onClick={() => void openMode("invoice")} />
+    </div>
+  </div>
+}
+
+function MultiSelectList({ title, icon: Icon, allLabel, items, selected, onChange, placeholder }: { title: string; icon: typeof Users; allLabel: string; items: { id: string; label: string }[]; selected: Set<string>; onChange: (value: Set<string>) => void; placeholder: string }) {
+  const [search, setSearch] = useState("")
+  const visible = items.filter(item => item.label.toLowerCase().includes(search.toLowerCase()))
+  const toggle = (id: string) => { const next = new Set(selected); next.has(id) ? next.delete(id) : next.add(id); onChange(next) }
+  const selectVisible = () => onChange(new Set([...selected, ...visible.map(item => item.id)]))
+  return <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><span className="mb-2 grid size-10 place-items-center rounded-xl bg-blue-50 text-primary"><Icon className="size-5" /></span><CardTitle>{title}</CardTitle><CardDescription>{selected.size ? `${selected.size} selected` : allLabel}</CardDescription></div>{selected.size>0&&<Button size="sm" variant="ghost" onClick={() => onChange(new Set())}>Use all</Button>}</div></CardHeader><CardContent className="grid gap-3">
+    <Input value={search} onChange={event => setSearch(event.target.value)} placeholder={placeholder} />
+    <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{visible.length} shown</span><Button size="sm" variant="ghost" onClick={selectVisible}>Select shown</Button></div>
+    <div className="max-h-64 overflow-y-auto rounded-xl border">
+      {visible.map(item => <label className="flex cursor-pointer items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0 hover:bg-slate-50" key={item.id}><input type="checkbox" className="size-4 accent-[#2563eb]" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /><span>{item.label}</span></label>)}
+      {!visible.length&&<p className="p-6 text-center text-sm text-muted-foreground">No matches.</p>}
+    </div>
+  </CardContent></Card>
+}
+
+function ExportChoice({ icon: Icon, title, detail, action, onClick }: { icon: typeof FileSpreadsheet; title: string; detail: string; action: string; onClick: () => void }) {
+  return <Card className="flex flex-col"><CardHeader className="flex-1"><span className="mb-2 grid size-12 place-items-center rounded-xl bg-blue-50 text-primary"><Icon className="size-6" /></span><CardTitle>{title}</CardTitle><CardDescription>{detail}</CardDescription></CardHeader><CardContent><Button className="w-full justify-between" variant="outline" onClick={onClick}>{action}<ChevronRight className="size-4" /></Button></CardContent></Card>
 }
 
 function AccessLoading({ label }: { label: string }) {

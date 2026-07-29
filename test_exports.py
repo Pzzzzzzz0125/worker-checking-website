@@ -6,6 +6,7 @@ from zipfile import ZipFile
 from report_handlers.exports import (
     AUDITOR_TEMPLATE,
     INVOICE_TEMPLATE,
+    _filters,
     auditor_rows,
     invoice_values,
 )
@@ -74,6 +75,26 @@ class ExportTests(unittest.TestCase):
         self.assertAlmostEqual(sum(float(row[7]) for row in rows), 8)
         self.assertAlmostEqual(sum(float(row[8]) for row in rows), 2)
 
+    def test_auditor_accepts_multiple_worker_and_site_filters(self):
+        start, end, worker_keys, sites = _filters({
+            "from": "2026-07-01",
+            "to": "2026-07-31",
+            "worker_ids": ["1", "1"],
+            "sites": ["100 Main St", "200 Oak Ave"],
+        })
+        self.assertEqual((start, end), (date(2026, 7, 1), date(2026, 7, 31)))
+        self.assertEqual(worker_keys, ["1"])
+        self.assertEqual(sites, ["100 Main St", "200 Oak Ave"])
+        rows = auditor_rows(
+            sample_data(),
+            date(2026, 7, 6),
+            date(2026, 7, 6),
+            worker_keys=["1"],
+            sites=["200 Oak Ave"],
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2], "200 Oak Ave")
+
     def test_invoice_uses_customer_billing_rate_not_worker_salary(self):
         values = invoice_values(
             sample_data(),
@@ -86,7 +107,7 @@ class ExportTests(unittest.TestCase):
             },
             date(2026, 7, 6),
             date(2026, 7, 6),
-            site="100 Main St",
+            sites=["100 Main St"],
         )
         self.assertEqual(values["F3"], "INV-42")
         self.assertEqual(values["F8"], "100 Main St")

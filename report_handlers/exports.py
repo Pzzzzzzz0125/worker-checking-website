@@ -27,30 +27,46 @@ def _date(value: object, label: str) -> date:
         raise ValueError(f"Choose a valid {label} date.") from None
 
 
-def _filters(body: dict) -> tuple[date, date, str, str]:
+def _selection(body: dict, plural: str, singular: str) -> list[str]:
+    raw = body.get(plural)
+    if raw is None:
+        raw = [body.get(singular)] if body.get(singular) not in (None, "") else []
+    if not isinstance(raw, list):
+        raise ValueError(f"{plural} must be a list.")
+    values = []
+    for item in raw:
+        value = " ".join(str(item or "").split())
+        if value and value not in values:
+            values.append(value)
+    if len(values) > 500:
+        raise ValueError(f"Choose no more than 500 {plural.replace('_', ' ')}.")
+    return values
+
+
+def _filters(body: dict) -> tuple[date, date, list[str], list[str]]:
     start = _date(body.get("from"), "From")
     end = _date(body.get("to"), "To")
     if start > end:
         raise ValueError("From date must be on or before To date.")
     if (end - start).days > 366:
         raise ValueError("An export date range cannot exceed 367 days.")
-    worker_key = str(body.get("worker_id") or "").strip()
-    if worker_key and not worker_key.isdigit():
-        raise ValueError("Choose a valid worker.")
-    site = " ".join(str(body.get("site") or "").split())
-    if len(site) > 250:
-        raise ValueError("Site is too long.")
-    return start, end, worker_key, site
+    worker_keys = _selection(body, "worker_ids", "worker_id")
+    if any(not worker_key.isdigit() for worker_key in worker_keys):
+        raise ValueError("Choose valid workers.")
+    sites = _selection(body, "sites", "site")
+    if any(len(site) > 250 for site in sites):
+        raise ValueError("A site name is too long.")
+    return start, end, worker_keys, sites
 
 
-def _load(base, start: date, end: date, worker_key: str) -> dict:
+def _load(base, start: date, end: date, worker_keys: list[str]) -> dict:
     query_start = start - timedelta(days=start.weekday())
     query_end = end + timedelta(days=6 - end.weekday())
     return load_report_data(
         base,
         query_start,
         query_end,
-        worker_key=worker_key,
+        worker_key=worker_keys[0] if len(worker_keys) == 1 else "",
     )
 
 
@@ -58,24 +74,25 @@ def _selected_days(
     data: dict,
     start: date,
     end: date,
-    worker_key: str,
+    worker_keys: list[str],
 ) -> list[dict]:
     return [
         day
         for day in data["days"]
         if day["status"] == "worked"
         and start.isoformat() <= day["date"] <= end.isoformat()
-        and (not worker_key or day["worker_key"] == worker_key)
+        and (not worker_keys or day["worker_key"] in worker_keys)
     ]
 
 
-def _selected_locations(day: dict, site: str) -> list[dict]:
-    if not site:
+def _selected_locations(day: dict, sites: list[str]) -> list[dict]:
+    if not sites:
         return day["locations"]
+    selected_sites = {site.casefold() for site in sites}
     return [
         item
         for item in day["locations"]
-        if item["name"].casefold() == site.casefold()
+        if item["name"].casefold() in selected_sites
     ]
 
 
@@ -83,9 +100,11 @@ def auditor_rows(
     data: dict,
     start: date,
     end: date,
-    worker_key: str = "",
-    site: str = "",
+    worker_keys: list[str] | None = None,
+    sites: list[str] | None = None,
 ) -> list[list[str | float]]:
+    worker_keys = worker_keys or []
+    sites = sites or []
     breakdowns = {
         key: california_overtime(
             data["days"], key, start, end, worker["worker_type"],
@@ -93,8 +112,8 @@ def auditor_rows(
         for key, worker in data["workers"].items()
     }
     dated_rows: list[tuple[str, list[str | float]]] = []
-    for day in _selected_days(data, start, end, worker_key):
-        selected = _selected_locations(day, site)
+    for day in _selected_days(data, start, end, worker_keys):
+        selected = _selected_locations(day, sites)
         if not selected:
             continue
         all_site_hours = sum(
@@ -159,9 +178,11 @@ def invoice_values(
     body: dict,
     start: date,
     end: date,
-    worker_key: str = "",
-    site: str = "",
+    worker_keys: list[str] | None = None,
+    sites: list[str] | None = None,
 ) -> dict[str, str | float]:
+    worker_keys = worker_keys or []
+    sites = sites or []
     try:
         billing_rate = round(float(body.get("billing_rate") or 0), 2)
     except (TypeError, ValueError):
@@ -185,11 +206,11 @@ def invoice_values(
     if not invoice_number:
         raise ValueError("Invoice number is required.")
 
-    selected_days = _selected_days(data, start, end, worker_key)
+    selected_days = _selected_days(data, start, end, worker_keys)
     locations = [
         location
         for day in selected_days
-        for location in _selected_locations(day, site)
+        for location in _selected_locations(day, sites)
         if float(location.get("hours") or 0) > 0
     ]
     if not locations:
@@ -197,7 +218,7 @@ def invoice_values(
     hours = round(sum(float(item["hours"]) for item in locations), 2)
     amount = round(hours * billing_rate, 2)
     worker_names = sorted(
-        {day["worker_name"] for day in selected_days if _selected_locations(day, site)},
+        {day["worker_name"] for day in selected_days if _selected_locations(day, sites)},
         key=str.casefold,
     )
     sites = sorted({item["name"] for item in locations}, key=str.casefold)
@@ -225,11 +246,11 @@ def invoice_values(
 
 def build_export(base, body: dict) -> tuple[bytes, str]:
     export_type = str(body.get("template") or "").casefold()
-    start, end, worker_key, site = _filters(body)
-    data = _load(base, start, end, worker_key)
+    start, end, worker_keys, sites = _filters(body)
+    data = _load(base, start, end, worker_keys)
     output = io.BytesIO()
     if export_type == "auditor":
-        rows = auditor_rows(data, start, end, worker_key, site)
+        rows = auditor_rows(data, start, end, worker_keys, sites)
         if not rows:
             raise ValueError("No worked site hours match the selected filters.")
         fill_template_workbook(
@@ -239,7 +260,7 @@ def build_export(base, body: dict) -> tuple[bytes, str]:
         )
         return output.getvalue(), f"Worker-Compensation-Auditor-{start}-{end}.xlsx"
     if export_type == "invoice":
-        values = invoice_values(data, body, start, end, worker_key, site)
+        values = invoice_values(data, body, start, end, worker_keys, sites)
         fill_template_workbook(
             INVOICE_TEMPLATE,
             output,
