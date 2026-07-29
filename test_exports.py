@@ -73,7 +73,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(rows[0][3], "Framing (CC-1)")
         self.assertAlmostEqual(sum(float(row[6]) for row in rows), 10)
         self.assertAlmostEqual(sum(float(row[7]) for row in rows), 8)
-        self.assertAlmostEqual(sum(float(row[8]) for row in rows), 2)
+        self.assertAlmostEqual(sum(float(row[8]) for row in rows), 11)
 
     def test_auditor_accepts_multiple_worker_and_site_filters(self):
         start, end, worker_keys, sites = _filters({

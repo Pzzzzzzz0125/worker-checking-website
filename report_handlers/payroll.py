@@ -87,6 +87,7 @@ class handler(BaseHTTPRequestHandler):
                     "totals": {
                         "hours": round(sum(item["hours"] for item in workers), 2),
                         "regular_hours": round(sum(item["regular_hours"] for item in workers), 2),
+                        "weighted_hours": round(sum(item["weighted_hours"] for item in workers), 2),
                         "estimated_salary": round(sum(item["estimated_salary"] for item in workers), 2),
                         "workers": len([item for item in workers if item["worked_days"]]),
                         "checked": len([item for item in workers if item["checked"]]),

@@ -157,6 +157,8 @@ class handler(BaseHTTPRequestHandler):
                     requested_start, requested_end, worker_type,
                 )
                 estimated_cost = 0.0
+                regular_hours = 0.0
+                weighted_hours = 0.0
                 for work_day in data["days"]:
                     if work_day["worker_key"] != worker_key or work_day["date"] not in dates:
                         continue
@@ -164,14 +166,18 @@ class handler(BaseHTTPRequestHandler):
                     location_hours = sum(float(location.get("hours") or 0) for location in work_day["locations"] if location["name"].casefold() == matched.casefold())
                     if not location_hours or not actual_day_hours:
                         continue
-                    weighted_hours = float(weighted_by_day.get(work_day["date"], {}).get("weighted_hours", actual_day_hours))
-                    estimated_cost += location_hours * (weighted_hours / actual_day_hours) * rate / 8.0
-                item.update({"hours": round(item["hours"], 2), "days": len(dates), "first_date": dates[0], "last_date": dates[-1], "worker_type": worker_type, "daily_rate": round(rate, 2), "estimated_cost": round(estimated_cost, 2)})
+                    part = weighted_by_day.get(work_day["date"], {})
+                    day_regular = float(part.get("regular_hours", actual_day_hours))
+                    day_weighted = float(part.get("weighted_hours", actual_day_hours))
+                    regular_hours += location_hours * day_regular / actual_day_hours
+                    weighted_hours += location_hours * day_weighted / actual_day_hours
+                    estimated_cost += location_hours * (day_weighted / actual_day_hours) * rate / 8.0
+                item.update({"hours": round(item["hours"], 2), "regular_hours": round(regular_hours, 2), "weighted_hours": round(weighted_hours, 2), "days": len(dates), "first_date": dates[0], "last_date": dates[-1], "worker_type": worker_type, "daily_rate": round(rate, 2), "estimated_cost": round(estimated_cost, 2)})
                 workers.append(item)
             workers.sort(key=lambda item: (-item["hours"], item["worker_name"].casefold()))
             dates = sorted(all_dates)
             selected_days = [day for day in data["days"] if start <= day["date"] <= end]
-            json_response(self, {"location": matched, "range": {"from": start, "to": end}, "totals": {"workers": len(workers), "hours": round(sum(item["hours"] for item in workers), 2), "estimated_cost": round(sum(item["estimated_cost"] for item in workers), 2), "days": len(dates), "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None}, "workers": workers, "cost_centers": aggregate(selected_days, "cost_centers")})
+            json_response(self, {"location": matched, "range": {"from": start, "to": end}, "totals": {"workers": len(workers), "hours": round(sum(item["hours"] for item in workers), 2), "regular_hours": round(sum(item["regular_hours"] for item in workers), 2), "weighted_hours": round(sum(item["weighted_hours"] for item in workers), 2), "estimated_cost": round(sum(item["estimated_cost"] for item in workers), 2), "days": len(dates), "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None}, "workers": workers, "cost_centers": aggregate(selected_days, "cost_centers")})
         except (ValueError, LarkAPIError) as error:
             status = error.status if isinstance(error, LarkAPIError) else 400
             json_response(self, {"error": str(error)}, status)

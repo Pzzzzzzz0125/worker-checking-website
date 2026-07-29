@@ -12,7 +12,7 @@ class FakeBase:
     def __init__(self):
         self.data = {
             "Workers": [
-                record("rec-worker", **{"Worker Key": "7", "Name": "Ana Diaz", "Active": True}),
+                record("rec-worker", **{"Worker Key": "7", "Name": "Ana Diaz", "Worker Type": "W2", "Active": True}),
                 record("rec-archived", **{"Worker Key": "8", "Name": "Archived Worker", "Active": False}),
             ],
             "Cost Centers": [
@@ -92,6 +92,7 @@ class LarkBaseReadTests(unittest.TestCase):
         self.assertEqual(result["totals"]["hours"], 10)
         self.assertEqual(result["totals"]["regular_hours"], 8)
         self.assertEqual(result["totals"]["overtime_hours"], 2)
+        self.assertEqual(result["totals"]["weighted_hours"], 11)
         self.assertEqual(result["totals"]["extra_pay"], 20)
         self.assertEqual(result["totals"]["active_workers"], 1)
         self.assertEqual(result["totals"]["record_count"], 1)

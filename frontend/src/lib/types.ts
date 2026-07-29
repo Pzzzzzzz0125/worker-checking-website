@@ -50,6 +50,7 @@ export type Summary = {
   totals: {
     hours: number
     regular_hours: number
+    weighted_hours: number
     overtime_hours: number
     active_workers: number
     worked_days: number

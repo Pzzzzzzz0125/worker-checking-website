@@ -15,6 +15,8 @@ def aggregate_with_estimated_cost(
 ) -> list[dict]:
     rows = aggregate(days, field_name)
     costs: dict[str, float] = {}
+    regular_hours: dict[str, float] = {}
+    weighted_hours: dict[str, float] = {}
     for day in days:
         actual_hours = max(float(day.get("total_hours") or 0), 0.0)
         if not actual_hours:
@@ -23,11 +25,20 @@ def aggregate_with_estimated_cost(
         for item in day[field_name]:
             key = item.get("id") or item.get("name", "").casefold()
             if key:
+                share = float(item.get("hours") or 0) / actual_hours
                 costs[key] = costs.get(key, 0.0) + (
-                    labor_cost * float(item.get("hours") or 0) / actual_hours
+                    labor_cost * share
+                )
+                regular_hours[key] = regular_hours.get(key, 0.0) + (
+                    float(day.get("regular_hours") or 0) * share
+                )
+                weighted_hours[key] = weighted_hours.get(key, 0.0) + (
+                    float(day.get("weighted_hours") or actual_hours) * share
                 )
     for row in rows:
         key = row.get("id") or row.get("name", "").casefold()
+        row["regular_hours"] = round(regular_hours.get(key, 0.0), 2)
+        row["weighted_hours"] = round(weighted_hours.get(key, 0.0), 2)
         row["estimated_cost"] = round(costs.get(key, 0.0), 2)
     return rows
 

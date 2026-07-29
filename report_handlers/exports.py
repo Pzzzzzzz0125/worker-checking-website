@@ -126,6 +126,7 @@ def auditor_rows(
                 "regular_hours": float(day["total_hours"]),
                 "overtime_hours": 0.0,
                 "doubletime_hours": 0.0,
+                "weighted_hours": float(day["total_hours"]),
             },
         )
         for location in selected:
@@ -134,14 +135,7 @@ def auditor_rows(
                 continue
             share = hours / all_site_hours if all_site_hours else 0.0
             regular = round(float(day_part["regular_hours"]) * share, 2)
-            overtime = round(
-                (
-                    float(day_part["overtime_hours"])
-                    + float(day_part["doubletime_hours"])
-                )
-                * share,
-                2,
-            )
+            weighted = round(float(day_part["weighted_hours"]) * share, 2)
             cost_codes = "; ".join(
                 f"{code.get('name') or 'Cost code'} ({code.get('id')})"
                 for code in location.get("cost_centers") or []
@@ -159,7 +153,7 @@ def auditor_rows(
                     location.get("end_time") or "",
                     round(hours, 2),
                     regular,
-                    overtime,
+                    weighted,
                     ],
                 )
             )
@@ -256,6 +250,11 @@ def build_export(base, body: dict) -> tuple[bytes, str]:
         fill_template_workbook(
             AUDITOR_TEMPLATE,
             output,
+            cell_updates={"Sheet1": {
+                "G1": "Actual hours",
+                "H1": "Regular hours",
+                "I1": "Weighted payroll hours",
+            }},
             table_rows={"Sheet1": rows},
         )
         return output.getvalue(), f"Worker-Compensation-Auditor-{start}-{end}.xlsx"
