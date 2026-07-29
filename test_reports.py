@@ -2,7 +2,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from api._reports import california_overtime, load_report_data, pay_period
+from api._reports import california_overtime, load_report_data, pay_period, report_period
 from api.reports import handler as ReportRouter
 from report_handlers.location_detail import handler as LocationDetailHandler
 
@@ -43,6 +43,45 @@ class ReportTests(unittest.TestCase):
 
     def test_pay_period_uses_actual_month_end(self):
         self.assertEqual(pay_period("2026-02", "2"), (date(2026, 2, 16), date(2026, 2, 28)))
+
+    def test_flexible_report_period_accepts_custom_dates_and_month_default(self):
+        self.assertEqual(
+            report_period(
+                {"from": ["2026-06-29"], "to": ["2026-07-12"]},
+                date(2026, 7, 28),
+            ),
+            (date(2026, 6, 29), date(2026, 7, 12)),
+        )
+        self.assertEqual(
+            report_period({}, date(2026, 7, 28)),
+            (date(2026, 7, 1), date(2026, 7, 28)),
+        )
+
+    def test_payroll_checks_are_keyed_by_custom_range_end(self):
+        class FakeBase:
+            def records(self, table_name, **kwargs):
+                del kwargs
+                if table_name == "Workers":
+                    return [{"fields": {
+                        "Worker Key": "1", "Name": "Active", "Active": True,
+                    }}]
+                if table_name == "Payroll Checks":
+                    return [{"fields": {
+                        "Worker Key": "1",
+                        "Period Start": "2026-07-01",
+                        "Period End": "2026-07-28",
+                        "Checked": True,
+                    }}]
+                return []
+
+        result = load_report_data(
+            FakeBase(),
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            check_period_start=date(2026, 7, 1),
+        )
+        self.assertTrue(result["checks"][("1", "2026-07-01", "2026-07-28")])
+        self.assertNotIn(("1", "2026-07-01", "2026-07-31"), result["checks"])
 
     def test_w2_weekly_overtime_looks_across_pay_period_boundary(self):
         monday = date(2026, 6, 29)

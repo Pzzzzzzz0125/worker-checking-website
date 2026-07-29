@@ -26,6 +26,21 @@ def pay_period(month: str, half: str) -> tuple[date, date]:
     return date(year, month_number, 16), date(year, month_number, calendar.monthrange(year, month_number)[1])
 
 
+def report_period(query: dict, today: date | None = None) -> tuple[date, date]:
+    """Validate a flexible report range while keeping a predictable default."""
+    current = today or date.today()
+    try:
+        start = date.fromisoformat(
+            query.get("from", [current.replace(day=1).isoformat()])[0]
+        )
+        end = date.fromisoformat(query.get("to", [current.isoformat()])[0])
+    except (TypeError, ValueError, IndexError):
+        raise ValueError("Choose valid From and To dates.") from None
+    if start > end or (end - start).days > 366:
+        raise ValueError("Choose a valid date range of 367 days or fewer.")
+    return start, end
+
+
 def load_report_data(
     base: LarkBase,
     start: date,
@@ -153,8 +168,13 @@ def load_report_data(
     for record in check_records:
         worker_key = text_value(field(record, "Worker Key"))
         period_start = date_value(field(record, "Period Start"))
+        period_end = date_value(field(record, "Period End"))
         if worker_key and period_start:
             checks[(worker_key, period_start)] = bool_value(field(record, "Checked"))
+            if period_end:
+                checks[(worker_key, period_start, period_end)] = bool_value(
+                    field(record, "Checked")
+                )
     return {"workers": workers, "days": days, "checks": checks}
 
 

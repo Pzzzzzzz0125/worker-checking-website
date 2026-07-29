@@ -101,9 +101,9 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
             "last_worked_date": worked[0]["work_date"] if worked else "",
             "record_count": len(records),
         },
-        # A compact activity list keeps the page useful without returning and
-        # rendering an entire pay-history table.
-        "records": records[:50],
+        # Overview intentionally contains summaries only. Detailed work history
+        # belongs in Payroll Check and Site Check.
+        "records": [],
     }
 
 

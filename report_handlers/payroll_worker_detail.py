@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import re
-from datetime import date, timedelta
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
 from api._data_store import DataStore
-from api._reports import aggregate, california_overtime, load_report_data, pay_period
+from api._reports import aggregate, california_overtime, load_report_data, report_period
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -17,14 +16,11 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         query = parse_qs(urlparse(self.path).query)
-        month = query.get("month", [date.today().strftime("%Y-%m")])[0]
-        half = query.get("half", ["1"])[0]
         worker_id = query.get("worker_id", [""])[0]
-        if not re.fullmatch(r"\d{4}-\d{2}", month) or not worker_id.isdigit():
-            json_response(self, {"error": "Choose a valid worker and month."}, 400)
-            return
         try:
-            start, end = pay_period(month, half)
+            start, end = report_period(query)
+            if not worker_id.isdigit():
+                raise ValueError("Choose a valid worker.")
             query_start = start - timedelta(days=start.weekday())
             query_end = end + timedelta(days=6 - end.weekday())
             data = load_report_data(
@@ -53,7 +49,7 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 {
                     "worker": worker,
-                    "period": {"from": start.isoformat(), "to": end.isoformat(), "month": month, "half": half},
+                    "period": {"from": start.isoformat(), "to": end.isoformat()},
                     "totals": {
                         "hours": round(sum(item["total_hours"] for item in selected), 2),
                         "regular_hours": round(sum(item["regular_hours"] for item in selected), 2),

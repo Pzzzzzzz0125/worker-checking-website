@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import calendar
 import json
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler
@@ -26,10 +25,11 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             worker_id = int(body.get("worker_id") or 0)
             start = date.fromisoformat(str(body.get("period_start") or ""))
-            end_day = 15 if start.day == 1 else calendar.monthrange(start.year, start.month)[1]
-            end = date(start.year, start.month, end_day)
+            end = date.fromisoformat(str(body.get("period_end") or ""))
+            if worker_id <= 0 or start > end or (end - start).days > 366:
+                raise ValueError("Choose a valid worker and date range.")
             checked = bool(body.get("checked"))
-            key = f"{worker_id}|{start.isoformat()}"
+            key = f"{worker_id}|{start.isoformat()}|{end.isoformat()}"
             now = int(datetime.now(tz=ZoneInfo("America/Los_Angeles")).timestamp() * 1000)
             result = DataStore().set_by_key(
                 "Payroll Checks",

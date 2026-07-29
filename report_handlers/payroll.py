@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import re
-from datetime import date, timedelta
+import calendar
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
 from api._data_store import DataStore
-from api._reports import california_overtime, load_report_data, pay_period
+from api._reports import california_overtime, load_report_data, report_period
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -17,17 +17,27 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": "Sign in with Lark first."}, 401)
             return
         query = parse_qs(urlparse(self.path).query)
-        month = query.get("month", [date.today().strftime("%Y-%m")])[0]
-        half = query.get("half", ["1" if date.today().day <= 15 else "2"])[0]
-        if not re.fullmatch(r"\d{4}-\d{2}", month):
-            json_response(self, {"error": "Choose a valid month."}, 400)
-            return
         try:
-            start, end = pay_period(month, half)
+            start, end = report_period(query)
+            worker_id = query.get("worker_id", [""])[0]
+            if worker_id and not worker_id.isdigit():
+                raise ValueError("Choose a valid worker.")
             query_start = start - timedelta(days=start.weekday())
             query_end = end + timedelta(days=6 - end.weekday())
             data = load_report_data(
-                DataStore(), query_start, query_end, check_period_start=start,
+                DataStore(), query_start, query_end, worker_key=worker_id,
+                check_period_start=start,
+            )
+            legacy_period = (
+                start.year == end.year
+                and start.month == end.month
+                and (
+                    (start.day == 1 and end.day == 15)
+                    or (
+                        start.day == 16
+                        and end.day == calendar.monthrange(end.year, end.month)[1]
+                    )
+                )
             )
             workers = []
             for worker_key, worker in data["workers"].items():
@@ -62,16 +72,21 @@ class handler(BaseHTTPRequestHandler):
                         "weighted_hours": weighted,
                         "extra_pay": extra,
                         "estimated_salary": round(weighted * rate / 8.0 + extra, 2),
-                        "checked": data["checks"].get((worker_key, start.isoformat()), False),
+                        "checked": data["checks"].get(
+                            (worker_key, start.isoformat(), end.isoformat()),
+                            data["checks"].get((worker_key, start.isoformat()), False)
+                            if legacy_period else False,
+                        ),
                     }
                 )
             workers.sort(key=lambda item: item["worker_name"].casefold())
             json_response(
                 self,
                 {
-                    "period": {"month": month, "half": half, "from": start.isoformat(), "to": end.isoformat()},
+                    "period": {"from": start.isoformat(), "to": end.isoformat()},
                     "totals": {
                         "hours": round(sum(item["hours"] for item in workers), 2),
+                        "regular_hours": round(sum(item["regular_hours"] for item in workers), 2),
                         "estimated_salary": round(sum(item["estimated_salary"] for item in workers), 2),
                         "workers": len([item for item in workers if item["worked_days"]]),
                         "checked": len([item for item in workers if item["checked"]]),

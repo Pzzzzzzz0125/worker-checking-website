@@ -95,7 +95,7 @@ class LarkBaseReadTests(unittest.TestCase):
         self.assertEqual(result["totals"]["extra_pay"], 20)
         self.assertEqual(result["totals"]["active_workers"], 1)
         self.assertEqual(result["totals"]["record_count"], 1)
-        self.assertNotIn("locations", result["records"][0])
+        self.assertEqual(result["records"], [])
         self.assertNotIn("daily", result)
 
 

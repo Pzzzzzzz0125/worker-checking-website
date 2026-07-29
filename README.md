@@ -158,7 +158,8 @@ They are built by Vercel and intentionally ignored by Git.
 ### Overview
 
 - Select a date range and optionally a worker.
-- Shows compact totals and only the latest 50 activity records.
+- Shows compact totals and a period summary; Recent Activity was removed to
+  keep the page focused and lightweight.
 - Reads Work Days only. It deliberately does not load all site-entry records.
 - Sites are loaded after initial startup by `bootstrap_details` and cached
   in browser local storage.
@@ -169,16 +170,19 @@ thousands of Lark records made the deployed application feel stuck.
 ### Payroll check
 
 - Protected by Lark administrator access or `PAYROLL_PASSWORD`.
-- Selects a month and either day 1–15 or day 16–month end.
-- Prioritizes actual hours, overtime, estimated payroll cost, days, and checked
-  state.
+- Selects any From/To range and optionally one worker.
+- Convenient presets provide Last 7 days, This month, 1–15, and 16–end; the
+  active preset is visibly selected and manual date edits create a custom range.
+- Each row separately shows regular hours, total hours, California overtime,
+  estimated payroll cost, days, and checked state.
 - Clicking a worker expands the history immediately below that worker.
 - The expanded table shows date, each site, allocated site hours, cost codes,
   regular hours, overtime, double time, actual hours, weighted hours,
   and estimated daily cost.
 - Time ranges are intentionally hidden in payroll history because historical
   imports did not contain trustworthy ranges.
-- Checked state is stored in `Payroll Checks`, not browser state.
+- Checked state is stored in `Payroll Checks`, not browser state, and is
+  isolated by worker plus both range start and range end.
 
 Payroll is an estimate and must be reviewed by the company payroll owner.
 
@@ -679,7 +683,7 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-At this handoff, the Python suite contains **63 tests** with one workbook test
+At this handoff, the Python suite contains **65 tests** with one workbook test
 skipped when the private payroll reference workbook is not present.
 
 Before merging a change:

@@ -32,7 +32,7 @@ export default function App(){
    <datalist id="locations">{bootstrap.locations.map(x=><option value={x} key={x}/>)}</datalist>
    <datalist id="centers">{bootstrap.cost_centers.map(c=><option value={`${c.name} (${c.id})`} key={c.id}/>)}</datalist>
    <Suspense fallback={<div className="page space-y-3"><Skeleton className="h-12 w-72"/><Skeleton className="h-40"/><Skeleton className="h-64"/></div>}>
-    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>}
+    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>}
    </Suspense>
  </AppShell>
 }
