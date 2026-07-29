@@ -87,7 +87,7 @@ export function WorkersView({ onSaved }: { onSaved: () => void }) {
       if (status === "archived" && worker.active) return false
       return !query || [worker.name, worker.worker_key, worker.aliases, worker.worker_type]
         .some(value => String(value).toLowerCase().includes(query))
-    })
+    }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
   }, [data, search, status])
 
   const save = async () => {

@@ -4,7 +4,10 @@ from unittest.mock import patch
 
 from api._reports import california_overtime, load_report_data, pay_period, report_period
 from api.reports import handler as ReportRouter
-from report_handlers.location_detail import handler as LocationDetailHandler
+from report_handlers.location_detail import (
+    build_worker_site_detail,
+    handler as LocationDetailHandler,
+)
 
 
 class ReportTests(unittest.TestCase):
@@ -99,6 +102,38 @@ class ReportTests(unittest.TestCase):
         contractor = california_overtime(days, "1", date(2026, 7, 1), date(2026, 7, 15), "1099")
         self.assertEqual(contractor["2026-07-04"]["overtime_hours"], 0)
         self.assertEqual(contractor["2026-07-04"]["regular_hours"], 8)
+
+    def test_site_worker_detail_allocates_weighted_hours_to_selected_site(self):
+        data = {
+            "workers": {
+                "1": {
+                    "id": 1, "key": "1", "name": "Worker A",
+                    "worker_type": "W2", "daily_rate": 320,
+                },
+            },
+            "days": [{
+                "worker_key": "1",
+                "date": "2026-07-01",
+                "status": "worked",
+                "total_hours": 10,
+                "locations": [
+                    {
+                        "name": "Site A", "hours": 5,
+                        "cost_centers": [{"id": "100", "name": "Framing"}],
+                    },
+                    {"name": "Site B", "hours": 5, "cost_centers": []},
+                ],
+            }],
+        }
+        result = build_worker_site_detail(
+            data, "1", "Site A", date(2026, 7, 1), date(2026, 7, 1),
+        )
+        self.assertEqual(result["totals"]["hours"], 5)
+        self.assertEqual(result["totals"]["regular_hours"], 4)
+        self.assertEqual(result["totals"]["overtime_hours"], 1)
+        self.assertEqual(result["totals"]["weighted_hours"], 5.5)
+        self.assertEqual(result["totals"]["estimated_cost"], 220)
+        self.assertEqual(result["days"][0]["cost_centers"][0]["id"], "100")
 
 
 if __name__ == "__main__":
