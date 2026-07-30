@@ -154,6 +154,27 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["estimated_cost"], 220)
         self.assertEqual(rows[1]["estimated_cost"], 220)
 
+    def test_payroll_detail_lists_missing_codes_and_reconciles_extra_pay(self):
+        rows = aggregate_with_estimated_cost(
+            [{
+                "date": "2026-07-01",
+                "worker_key": "1",
+                "total_hours": 8,
+                "regular_hours": 8,
+                "weighted_hours": 8,
+                "extra_pay": 20,
+                "cost_centers": [
+                    {"id": "CC-1", "name": "Framing", "hours": 3},
+                ],
+            }],
+            "cost_centers",
+            320,
+        )
+        missing = next(row for row in rows if row["name"] == "--")
+        self.assertEqual(missing["hours"], 5)
+        self.assertEqual(missing["estimated_cost"], 220)
+        self.assertEqual(sum(row["estimated_cost"] for row in rows), 340)
+
 
 if __name__ == "__main__":
     unittest.main()

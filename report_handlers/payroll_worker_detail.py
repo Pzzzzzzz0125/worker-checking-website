@@ -17,15 +17,28 @@ def aggregate_with_estimated_cost(
     costs: dict[str, float] = {}
     regular_hours: dict[str, float] = {}
     weighted_hours: dict[str, float] = {}
+    missing = {
+        "hours": 0.0,
+        "regular_hours": 0.0,
+        "weighted_hours": 0.0,
+        "estimated_cost": 0.0,
+        "dates": set(),
+    }
     for day in days:
         actual_hours = max(float(day.get("total_hours") or 0), 0.0)
         if not actual_hours:
+            missing["estimated_cost"] += float(day.get("extra_pay") or 0)
+            if day.get("extra_pay"):
+                missing["dates"].add(day["date"])
             continue
         labor_cost = float(day.get("weighted_hours") or actual_hours) * daily_rate / 8.0
+        represented_hours = 0.0
         for item in day[field_name]:
+            item_hours = max(float(item.get("hours") or 0), 0.0)
             key = item.get("id") or item.get("name", "").casefold()
             if key:
-                share = float(item.get("hours") or 0) / actual_hours
+                represented_hours += item_hours
+                share = item_hours / actual_hours
                 costs[key] = costs.get(key, 0.0) + (
                     labor_cost * share
                 )
@@ -35,11 +48,35 @@ def aggregate_with_estimated_cost(
                 weighted_hours[key] = weighted_hours.get(key, 0.0) + (
                     float(day.get("weighted_hours") or actual_hours) * share
                 )
+        missing_hours = max(actual_hours - represented_hours, 0.0)
+        missing_share = missing_hours / actual_hours
+        missing["hours"] += missing_hours
+        missing["regular_hours"] += float(day.get("regular_hours") or 0) * missing_share
+        missing["weighted_hours"] += float(
+            day.get("weighted_hours") or actual_hours
+        ) * missing_share
+        missing["estimated_cost"] += labor_cost * missing_share
+        missing["estimated_cost"] += float(day.get("extra_pay") or 0)
+        if missing_hours or day.get("extra_pay"):
+            missing["dates"].add(day["date"])
     for row in rows:
         key = row.get("id") or row.get("name", "").casefold()
         row["regular_hours"] = round(regular_hours.get(key, 0.0), 2)
         row["weighted_hours"] = round(weighted_hours.get(key, 0.0), 2)
         row["estimated_cost"] = round(costs.get(key, 0.0), 2)
+    if missing["hours"] or missing["estimated_cost"]:
+        rows.append({
+            "id": "",
+            "name": "--",
+            "hours": round(missing["hours"], 2),
+            "regular_hours": round(missing["regular_hours"], 2),
+            "weighted_hours": round(missing["weighted_hours"], 2),
+            "estimated_cost": round(missing["estimated_cost"], 2),
+            "days": len(missing["dates"]),
+            "worker_count": 1,
+            "first_date": min(missing["dates"]) if missing["dates"] else None,
+            "last_date": max(missing["dates"]) if missing["dates"] else None,
+        })
     return rows
 
 
