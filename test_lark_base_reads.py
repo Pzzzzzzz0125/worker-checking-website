@@ -96,6 +96,15 @@ class LarkBaseReadTests(unittest.TestCase):
         self.assertEqual(result["totals"]["extra_pay"], 20)
         self.assertEqual(result["totals"]["active_workers"], 1)
         self.assertEqual(result["totals"]["record_count"], 1)
+        self.assertEqual(result["trend_resolution"], "day")
+        self.assertEqual(len(result["trend"]), 15)
+        self.assertEqual(result["trend"][0], {
+            "start": "2026-07-01",
+            "label": "Jul 1",
+            "regular_hours": 8,
+            "weighted_hours": 11,
+        })
+        self.assertEqual(result["trend"][-1]["weighted_hours"], 0)
         self.assertEqual(result["records"], [])
         self.assertNotIn("daily", result)
 

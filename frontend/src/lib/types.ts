@@ -47,6 +47,13 @@ export type Bootstrap = {
 
 export type Summary = {
   range: { from: string; to: string }
+  trend_resolution: "day" | "week" | "month"
+  trend: {
+    start: string
+    label: string
+    regular_hours: number
+    weighted_hours: number
+  }[]
   totals: {
     hours: number
     regular_hours: number

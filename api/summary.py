@@ -131,8 +131,62 @@ def build_summary(base: LarkBase, start: str, end: str, selected_worker: str = "
         2,
     )
     weighted_hours = round(sum(item["weighted_hours"] for item in parts), 2)
+    span_days = (requested_end - requested_start).days + 1
+    resolution = "day" if span_days <= 31 else "week" if span_days <= 120 else "month"
+    def trend_bucket(work_date: date) -> tuple[date, str]:
+        if resolution == "day":
+            return work_date, f"{work_date:%b} {work_date.day}"
+        if resolution == "week":
+            bucket_date = work_date - timedelta(days=work_date.weekday())
+            return bucket_date, f"Week of {bucket_date:%b} {bucket_date.day}"
+        bucket_date = work_date.replace(day=1)
+        return bucket_date, bucket_date.strftime("%b %Y")
+
+    trend: dict[str, dict] = {}
+    cursor = requested_start
+    while cursor <= requested_end:
+        bucket_date, label = trend_bucket(cursor)
+        trend.setdefault(bucket_date.isoformat(), {
+            "start": bucket_date.isoformat(),
+            "label": label,
+            "regular_hours": 0.0,
+            "weighted_hours": 0.0,
+        })
+        if resolution == "day":
+            cursor += timedelta(days=1)
+        elif resolution == "week":
+            cursor += timedelta(days=7)
+        else:
+            cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+    for item in worked:
+        work_date = date.fromisoformat(item["work_date"])
+        bucket_date, label = trend_bucket(work_date)
+        bucket = trend.setdefault(
+            bucket_date.isoformat(),
+            {
+                "start": bucket_date.isoformat(),
+                "label": label,
+                "regular_hours": 0.0,
+                "weighted_hours": 0.0,
+            },
+        )
+        part = breakdown.get(item["worker_key"], {}).get(item["work_date"], {
+            "regular_hours": item["total_hours"],
+            "weighted_hours": item["total_hours"],
+        })
+        bucket["regular_hours"] += float(part["regular_hours"])
+        bucket["weighted_hours"] += float(part["weighted_hours"])
+    trend_rows = []
+    for bucket in sorted(trend.values(), key=lambda item: item["start"]):
+        trend_rows.append({
+            **bucket,
+            "regular_hours": round(bucket["regular_hours"], 2),
+            "weighted_hours": round(bucket["weighted_hours"], 2),
+        })
     return {
         "range": {"from": start, "to": end},
+        "trend_resolution": resolution,
+        "trend": trend_rows,
         "totals": {
             "hours": total_hours,
             "regular_hours": regular_hours,
