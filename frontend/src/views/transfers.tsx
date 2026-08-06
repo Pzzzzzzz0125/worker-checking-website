@@ -24,7 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { Input, Textarea } from "@/components/ui/input"
 import { api, downloadJSON, postJSON } from "@/lib/api"
 import type { Bootstrap } from "@/lib/types"
 import { displayDate, localISO } from "@/lib/utils"
@@ -171,8 +171,6 @@ export function ImportView() {
 
 export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const today = localISO()
-  const due = new Date(`${today}T12:00:00`)
-  due.setDate(due.getDate() + 30)
   const [mode, setMode] = useState<"schedule" | "auditor" | "invoice" | null>(null)
   const [access, setAccess] = useState<Access | null>(null)
   const [password, setPassword] = useState("")
@@ -183,17 +181,19 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [auditorTo, setAuditorTo] = useState(today)
   const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(new Set())
   const [auditorSites, setAuditorSites] = useState<Set<string>>(new Set())
-  const [invoiceFrom, setInvoiceFrom] = useState(`${today.slice(0, 7)}-01`)
-  const [invoiceTo, setInvoiceTo] = useState(today)
-  const [invoiceSite, setInvoiceSite] = useState("")
-  const [invoiceWorkerId, setInvoiceWorkerId] = useState("")
   const [auditorLoading, setAuditorLoading] = useState(false)
   const [invoiceLoading, setInvoiceLoading] = useState(false)
-  const [billTo, setBillTo] = useState("")
-  const [invoiceNumber, setInvoiceNumber] = useState(`SC-${today.replaceAll("-", "")}`)
   const [invoiceDate, setInvoiceDate] = useState(today)
-  const [paymentDue, setPaymentDue] = useState(due.toISOString().slice(0, 10))
-  const [billingRate, setBillingRate] = useState("")
+  const [paymentTerms, setPaymentTerms] = useState("Upon Receipt")
+  const [billToName, setBillToName] = useState("")
+  const [billToAddress, setBillToAddress] = useState("")
+  const [billToPhone, setBillToPhone] = useState("")
+  const [billToEmail, setBillToEmail] = useState("")
+  const [jobAddress, setJobAddress] = useState("")
+  const [jobAddressDetail, setJobAddressDetail] = useState("")
+  const [invoiceDescription, setInvoiceDescription] = useState("")
+  const [unitPrice, setUnitPrice] = useState("")
+  const [invoiceAmount, setInvoiceAmount] = useState("")
 
   const checkAccess = async () => {
     const value = await api<Access>("/api/export/access")
@@ -275,22 +275,27 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   }
 
   const generateInvoice = async () => {
-    if (!invoiceFrom || !invoiceTo || invoiceFrom > invoiceTo) return toast.error("Choose a valid From and To date range.")
-    if (!billTo.trim()) return toast.error("Enter Bill To before generating the invoice.")
-    if (Number(billingRate) <= 0) return toast.error("Enter a billing rate greater than 0.")
+    if (!billToName.trim()) return toast.error("Enter the Bill To name.")
+    if (!billToAddress.trim()) return toast.error("Enter the Bill To address.")
+    if (!jobAddress.trim()) return toast.error("Enter the Job address.")
+    if (!invoiceDescription.trim()) return toast.error("Enter the invoice Description.")
+    if (Number(unitPrice) <= 0) return toast.error("Enter a Unit price greater than 0.")
+    if (Number(invoiceAmount) <= 0) return toast.error("Enter an Amount greater than 0.")
     setInvoiceLoading(true)
     try {
       const filename = await downloadJSON("/api/export/template", {
         template: "invoice",
-        from: invoiceFrom,
-        to: invoiceTo,
-        site: invoiceSite.trim(),
-        worker_id: invoiceWorkerId,
-        bill_to: billTo,
-        invoice_number: invoiceNumber,
         invoice_date: invoiceDate,
-        payment_due: paymentDue,
-        billing_rate: Number(billingRate),
+        payment_terms: paymentTerms,
+        bill_to_name: billToName,
+        bill_to_address: billToAddress,
+        bill_to_phone: billToPhone,
+        bill_to_email: billToEmail,
+        job_address: jobAddress,
+        job_address_detail: jobAddressDetail,
+        description: invoiceDescription,
+        unit_price: Number(unitPrice),
+        amount: Number(invoiceAmount),
       })
       toast.success(`${filename} downloaded.`)
     } catch (error) {
@@ -363,22 +368,34 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   </div>
 
   if (mode === "invoice") return <div className="page">
-    {header("Speed Invoice Template", "Complete the invoice-specific fields. This form can be refined independently when the final invoice rules are confirmed.")}
+    {header("Speed Invoice Template", "Complete only the customer, job, and invoice details. Speed Construction information and the invoice number are automatic.")}
     <div className="grid gap-5">
-      <Card><CardHeader><CardTitle>Work to include</CardTitle><CardDescription>Invoice currently supports one worker and one site, or all records when left blank.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
-        <label className="field-label">From<Input type="date" value={invoiceFrom} onChange={event => setInvoiceFrom(event.target.value)} /></label>
-        <label className="field-label">To<Input type="date" value={invoiceTo} onChange={event => setInvoiceTo(event.target.value)} /></label>
-        <label className="field-label">Site<Input list="locations" value={invoiceSite} onChange={event => setInvoiceSite(event.target.value)} placeholder="All sites" /></label>
-        <label className="field-label">Worker<select className="h-11 rounded-lg border bg-white px-3 text-sm" value={invoiceWorkerId} onChange={event => setInvoiceWorkerId(event.target.value)}><option value="">All active workers</option>{bootstrap.workers.map(worker => <option value={worker.id} key={worker.id}>{worker.name}</option>)}</select></label>
+      <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Fixed invoice information</CardTitle><CardDescription>These company and numbering fields are inserted automatically and cannot be changed here.</CardDescription></div><Badge variant="secondary">Automatic</Badge></div></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><div className="rounded-xl border bg-slate-50 p-4 text-sm"><strong className="block">Speed Construction</strong><p className="mt-1 text-muted-foreground">Lic. #1098660 · Logan Du<br/>10275 N De Anza Blvd, Cupertino, CA 95014<br/>(510) 415-5834 · logan@speedcons.com</p></div><div className="rounded-xl border bg-blue-50 p-4 text-sm"><strong className="block text-primary">Invoice number</strong><p className="mt-1 text-muted-foreground">Generated automatically when the file is created.</p></div></CardContent></Card>
+
+      <Card><CardHeader><CardTitle>1. Bill To</CardTitle><CardDescription>Information for the customer receiving this invoice.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label sm:col-span-2">Customer or company name<Input value={billToName} onChange={event => setBillToName(event.target.value)} placeholder="e.g. 5A Holdings LLC" /></label>
+        <label className="field-label sm:col-span-2">Billing address<Input value={billToAddress} onChange={event => setBillToAddress(event.target.value)} placeholder="Street, city, state and ZIP" /></label>
+        <label className="field-label">Phone<Input type="tel" value={billToPhone} onChange={event => setBillToPhone(event.target.value)} placeholder="Optional" /></label>
+        <label className="field-label">Email<Input type="email" value={billToEmail} onChange={event => setBillToEmail(event.target.value)} placeholder="Optional" /></label>
       </CardContent></Card>
-      <Card><CardHeader><CardTitle>Invoice details</CardTitle><CardDescription>Amount = selected labor hours × billing rate. Worker salary rates are never used as customer billing rates.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
-        <label className="field-label sm:col-span-2">Bill To<Input value={billTo} onChange={event => setBillTo(event.target.value)} placeholder="Customer or company name" /></label>
-        <label className="field-label">Invoice number<Input value={invoiceNumber} onChange={event => setInvoiceNumber(event.target.value)} /></label>
-        <label className="field-label">Billing rate / labor hour<Input type="number" min="0" step=".01" value={billingRate} onChange={event => setBillingRate(event.target.value)} placeholder="0.00" /></label>
+
+      <Card><CardHeader><CardTitle>2. Job Address</CardTitle><CardDescription>Type any address. Existing sites will appear as suggestions, but a matching site is not required yet.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label sm:col-span-2">Job address<Input list="locations" value={jobAddress} onChange={event => setJobAddress(event.target.value)} placeholder="Search an existing site or enter a new address" /></label>
+        <label className="field-label sm:col-span-2">Address details<Input value={jobAddressDetail} onChange={event => setJobAddressDetail(event.target.value)} placeholder="City, state, ZIP, unit or lot (optional)" /></label>
+      </CardContent></Card>
+
+      <Card><CardHeader><CardTitle>3. Description and Amount</CardTitle><CardDescription>Enter the invoice wording and amounts exactly as they should appear in the spreadsheet.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
+        <label className="field-label sm:col-span-2">Description<Textarea value={invoiceDescription} onChange={event => setInvoiceDescription(event.target.value)} placeholder="Describe the work, milestone, deposit, or payment" /></label>
+        <label className="field-label">Unit price<Input type="number" min="0" step=".01" value={unitPrice} onChange={event => {const next=event.target.value;setUnitPrice(next);if(!invoiceAmount||invoiceAmount===unitPrice)setInvoiceAmount(next)}} placeholder="0.00" /></label>
+        <label className="field-label">Amount<Input type="number" min="0" step=".01" value={invoiceAmount} onChange={event => setInvoiceAmount(event.target.value)} placeholder="0.00" /></label>
+      </CardContent></Card>
+
+      <Card><CardHeader><CardTitle>4. Date and Payment</CardTitle><CardDescription>The payment methods and standard footer text already come from the approved template.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
         <label className="field-label">Invoice date<Input type="date" value={invoiceDate} onChange={event => setInvoiceDate(event.target.value)} /></label>
-        <label className="field-label">Payment due<Input type="date" value={paymentDue} onChange={event => setPaymentDue(event.target.value)} /></label>
-        <Button className="sm:col-span-2" size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading}>{invoiceLoading?<LoaderCircle className="size-4 animate-spin"/>:<Receipt className="size-4" />}{invoiceLoading?"Generating invoice…":"Download Speed invoice"}</Button>
+        <label className="field-label">Payment terms<Input list="payment-terms" value={paymentTerms} onChange={event => setPaymentTerms(event.target.value)} placeholder="Upon Receipt" /><datalist id="payment-terms"><option value="Upon Receipt"/><option value="Net 15"/><option value="Net 30"/></datalist></label>
       </CardContent></Card>
+
+      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Invoice total</strong><p className="text-2xl font-bold tabular-nums text-primary">${Number(invoiceAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div><Button size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading}>{invoiceLoading?<LoaderCircle className="size-4 animate-spin"/>:<Receipt className="size-4" />}{invoiceLoading?"Generating invoice…":"Download Speed invoice"}</Button></CardContent></Card>
     </div>
   </div>
 

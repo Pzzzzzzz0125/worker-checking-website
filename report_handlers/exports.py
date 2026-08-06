@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -167,72 +167,74 @@ def auditor_rows(
     return [row for _, row in dated_rows]
 
 
-def invoice_values(
-    data: dict,
-    body: dict,
-    start: date,
-    end: date,
-    worker_keys: list[str] | None = None,
-    sites: list[str] | None = None,
-) -> dict[str, str | float]:
-    worker_keys = worker_keys or []
-    sites = sites or []
+def _invoice_text(
+    body: dict, key: str, label: str, *, required: bool = False, limit: int = 250,
+) -> str:
+    value = " ".join(str(body.get(key) or "").split())
+    if required and not value:
+        raise ValueError(f"{label} is required.")
+    if len(value) > limit:
+        raise ValueError(f"{label} must be {limit} characters or fewer.")
+    return value
+
+
+def invoice_values(body: dict) -> dict[str, str | float]:
     try:
-        billing_rate = round(float(body.get("billing_rate") or 0), 2)
+        unit_price = round(float(body.get("unit_price") or 0), 2)
+        amount = round(float(body.get("amount") or unit_price), 2)
     except (TypeError, ValueError):
-        raise ValueError("Billing rate must be a number.") from None
-    if billing_rate <= 0 or billing_rate > 1_000_000:
-        raise ValueError("Enter a Billing rate greater than 0.")
-    bill_to = " ".join(str(body.get("bill_to") or "").split())
-    if not bill_to or len(bill_to) > 250:
-        raise ValueError("Bill To is required and must be 250 characters or fewer.")
-    invoice_date = _date(body.get("invoice_date") or date.today().isoformat(), "Invoice")
-    due_date = _date(
-        body.get("payment_due")
-        or (invoice_date + timedelta(days=30)).isoformat(),
-        "Payment Due",
+        raise ValueError("Unit price and amount must be numbers.") from None
+    if unit_price <= 0 or unit_price > 100_000_000:
+        raise ValueError("Enter a Unit price greater than 0.")
+    if amount <= 0 or amount > 100_000_000:
+        raise ValueError("Enter an Amount greater than 0.")
+
+    bill_to_name = _invoice_text(
+        body, "bill_to_name", "Bill To name", required=True, limit=120,
     )
+    bill_to_address = _invoice_text(
+        body, "bill_to_address", "Bill To address", required=True, limit=180,
+    )
+    bill_to_phone = _invoice_text(body, "bill_to_phone", "Bill To phone", limit=60)
+    bill_to_email = _invoice_text(body, "bill_to_email", "Bill To email", limit=120)
+    job_address = _invoice_text(
+        body, "job_address", "Job address", required=True, limit=180,
+    )
+    job_address_detail = _invoice_text(
+        body, "job_address_detail", "Job address details", limit=180,
+    )
+    description = _invoice_text(
+        body, "description", "Description", required=True, limit=500,
+    )
+    payment_terms = _invoice_text(
+        body, "payment_terms", "Payment terms", limit=80,
+    ) or "Upon Receipt"
+    invoice_date = _date(body.get("invoice_date") or date.today().isoformat(), "Invoice")
     invoice_number = re.sub(
         r"[^A-Za-z0-9_-]+",
         "-",
-        str(body.get("invoice_number") or f"SC-{invoice_date:%Y%m%d}").strip(),
+        str(body.get("invoice_number") or datetime.now().strftime("SC-%Y%m%d-%H%M%S")).strip(),
     ).strip("-")[:60]
     if not invoice_number:
         raise ValueError("Invoice number is required.")
-
-    selected_days = _selected_days(data, start, end, worker_keys)
-    locations = [
-        location
-        for day in selected_days
-        for location in _selected_locations(day, sites)
-        if float(location.get("hours") or 0) > 0
-    ]
-    if not locations:
-        raise ValueError("No worked site hours match the selected filters.")
-    hours = round(sum(float(item["hours"]) for item in locations), 2)
-    amount = round(hours * billing_rate, 2)
-    worker_names = sorted(
-        {day["worker_name"] for day in selected_days if _selected_locations(day, sites)},
-        key=str.casefold,
-    )
-    sites = sorted({item["name"] for item in locations}, key=str.casefold)
-    worker_label = worker_names[0] if len(worker_names) == 1 else f"{len(worker_names)} workers"
-    site_label = sites[0] if len(sites) == 1 else f"{len(sites)} sites"
-    description = (
-        f"Labor services · {start:%m/%d/%Y}–{end:%m/%d/%Y} · "
-        f"{worker_label} · {hours:g} labor hours"
+    contact = " · ".join(
+        value for value in (
+            f"Tel: {bill_to_phone}" if bill_to_phone else "",
+            f"Email: {bill_to_email}" if bill_to_email else "",
+        ) if value
     )
     return {
         "F3": invoice_number,
         "G3": invoice_date.strftime("%m/%d/%Y"),
-        "F8": site_label,
-        "A11": bill_to,
-        "A12": f"Service period: {start:%m/%d/%Y}–{end:%m/%d/%Y}",
-        "A13": f"Workers: {', '.join(worker_names)}",
+        "F8": job_address,
+        "F9": job_address_detail,
+        "A11": bill_to_name,
+        "A12": bill_to_address,
+        "A13": contact,
         "A16": description,
-        "F16": billing_rate,
+        "F16": unit_price,
         "G16": amount,
-        "B27": due_date.strftime("%m/%d/%Y"),
+        "B27": payment_terms,
         "G27": amount,
         "G30": amount,
     }
@@ -240,10 +242,10 @@ def invoice_values(
 
 def build_export(base, body: dict) -> tuple[bytes, str]:
     export_type = str(body.get("template") or "").casefold()
-    start, end, worker_keys, sites = _filters(body)
-    data = _load(base, start, end, worker_keys)
     output = io.BytesIO()
     if export_type == "auditor":
+        start, end, worker_keys, sites = _filters(body)
+        data = _load(base, start, end, worker_keys)
         rows = auditor_rows(data, start, end, worker_keys, sites)
         if not rows:
             raise ValueError("No worked site hours match the selected filters.")
@@ -259,7 +261,7 @@ def build_export(base, body: dict) -> tuple[bytes, str]:
         )
         return output.getvalue(), f"Worker-Compensation-Auditor-{start}-{end}.xlsx"
     if export_type == "invoice":
-        values = invoice_values(data, body, start, end, worker_keys, sites)
+        values = invoice_values(body)
         fill_template_workbook(
             INVOICE_TEMPLATE,
             output,

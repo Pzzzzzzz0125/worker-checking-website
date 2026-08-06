@@ -95,25 +95,42 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][2], "200 Oak Ave")
 
-    def test_invoice_uses_customer_billing_rate_not_worker_salary(self):
-        values = invoice_values(
-            sample_data(),
-            {
-                "bill_to": "Example Customer",
-                "invoice_number": "INV-42",
-                "invoice_date": "2026-07-07",
-                "payment_due": "2026-08-06",
-                "billing_rate": 125,
-            },
-            date(2026, 7, 6),
-            date(2026, 7, 6),
-            sites=["100 Main St"],
-        )
+    def test_invoice_maps_user_sections_to_the_approved_template(self):
+        values = invoice_values({
+            "bill_to_name": "Example Customer",
+            "bill_to_address": "500 Market St, San Jose, CA 95113",
+            "bill_to_phone": "408-555-0100",
+            "bill_to_email": "billing@example.com",
+            "job_address": "100 Main St",
+            "job_address_detail": "San Jose, CA 95112",
+            "description": "First progress payment",
+            "invoice_number": "INV-42",
+            "invoice_date": "2026-07-07",
+            "payment_terms": "Upon Receipt",
+            "unit_price": 750,
+            "amount": 750,
+        })
         self.assertEqual(values["F3"], "INV-42")
         self.assertEqual(values["F8"], "100 Main St")
-        self.assertEqual(values["F16"], 125)
+        self.assertEqual(values["F9"], "San Jose, CA 95112")
+        self.assertEqual(values["A11"], "Example Customer")
+        self.assertEqual(values["A12"], "500 Market St, San Jose, CA 95113")
+        self.assertEqual(values["A16"], "First progress payment")
+        self.assertEqual(values["F16"], 750)
         self.assertEqual(values["G16"], 750)
-        self.assertNotEqual(values["G16"], 320)
+        self.assertEqual(values["B27"], "Upon Receipt")
+
+    def test_invoice_number_is_generated_when_not_supplied(self):
+        values = invoice_values({
+            "bill_to_name": "Example Customer",
+            "bill_to_address": "500 Market St",
+            "job_address": "100 Main St",
+            "description": "Deposit",
+            "invoice_date": "2026-07-07",
+            "unit_price": 100,
+            "amount": 100,
+        })
+        self.assertRegex(str(values["F3"]), r"^SC-\d{8}-\d{6}$")
 
     def test_templates_generate_valid_xlsx_packages(self):
         auditor_output = io.BytesIO()
