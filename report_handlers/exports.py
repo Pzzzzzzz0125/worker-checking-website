@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import json
 import re
+from html import escape
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from zipfile import ZipFile
 
 from api._data_store import DataStore
 from api._lark import LarkAPIError
@@ -240,7 +242,189 @@ def invoice_values(body: dict) -> dict[str, str | float]:
     }
 
 
-def build_export(base, body: dict) -> tuple[bytes, str]:
+def _invoice_pdf(values: dict[str, str | float]) -> bytes:
+    """Render a print-ready invoice without relying on Office on Vercel."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        Image,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    output = io.BytesIO()
+    invoice_number = str(values["F3"])
+    document = SimpleDocTemplate(
+        output,
+        pagesize=letter,
+        rightMargin=0.55 * inch,
+        leftMargin=0.55 * inch,
+        topMargin=0.45 * inch,
+        bottomMargin=0.4 * inch,
+        title=f"Speed Invoice {invoice_number}",
+        author="Speed Construction and Development Inc",
+    )
+    styles = getSampleStyleSheet()
+    body_style = ParagraphStyle(
+        "InvoiceBody", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=9.2, leading=12, textColor=colors.HexColor("#111827"),
+    )
+    small_style = ParagraphStyle(
+        "InvoiceSmall", parent=body_style, fontSize=8, leading=10,
+    )
+    section_style = ParagraphStyle(
+        "InvoiceSection", parent=body_style, fontName="Helvetica-Bold",
+        fontSize=9.5, leading=11, textColor=colors.HexColor("#17324D"),
+    )
+    title_style = ParagraphStyle(
+        "InvoiceTitle", parent=styles["Title"], fontName="Helvetica-Bold",
+        fontSize=25, leading=28, alignment=TA_RIGHT,
+        textColor=colors.HexColor("#17324D"),
+    )
+    centered_small = ParagraphStyle(
+        "InvoiceCenteredSmall", parent=small_style, alignment=TA_CENTER,
+    )
+    right_total = ParagraphStyle(
+        "InvoiceRightTotal", parent=body_style, fontName="Helvetica-Bold",
+        alignment=TA_RIGHT,
+    )
+
+    def paragraph(value: object, style=body_style, *, trusted: bool = False) -> Paragraph:
+        text = str(value or "")
+        if not trusted:
+            text = escape(text)
+        text = text.replace("\n", "<br/>")
+        return Paragraph(text or "&nbsp;", style)
+
+    def money(value: object) -> str:
+        return f"${float(value or 0):,.2f}"
+
+    with ZipFile(INVOICE_TEMPLATE) as archive:
+        logo_data = io.BytesIO(archive.read("xl/media/image1.jpeg"))
+    logo = Image(logo_data, width=2.45 * inch, height=0.59 * inch)
+
+    company = Table([
+        [logo],
+        [paragraph(
+            "<b>Speed Construction</b><br/>Lic. #1098660 · Logan Du<br/>"
+            "10275 N De Anza Blvd<br/>Cupertino, CA 95014<br/>"
+            "Tel: (510) 415-5834 · Email: logan@speedcons.com",
+            small_style, trusted=True,
+        )],
+    ], colWidths=[3.0 * inch])
+    company.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
+    ]))
+
+    invoice_meta = Table([
+        [Paragraph("INVOICE", title_style)],
+        [Table([
+            [paragraph("<b>INVOICE #</b>", centered_small, trusted=True), paragraph("<b>DATE</b>", centered_small, trusted=True)],
+            [paragraph(invoice_number, centered_small), paragraph(values["G3"], centered_small)],
+        ], colWidths=[1.35 * inch, 1.35 * inch], style=TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#475569")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E2E8F0")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))],
+    ], colWidths=[2.7 * inch])
+    invoice_meta.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
+    story = [Table([[company, invoice_meta]], colWidths=[3.55 * inch, 3.25 * inch], style=TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ])), Spacer(1, 12)]
+
+    address_table = Table([
+        [paragraph("BILL TO", section_style), paragraph("JOB ADDRESS", section_style)],
+        [paragraph(
+            f"<b>{escape(str(values['A11']))}</b><br/>"
+            f"{escape(str(values['A12']))}<br/>{escape(str(values['A13']))}",
+            trusted=True,
+        ), paragraph(
+            f"<b>{escape(str(values['F8']))}</b><br/>{escape(str(values['F9']))}",
+            trusted=True,
+        )],
+    ], colWidths=[3.35 * inch, 3.45 * inch])
+    address_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E2E8F0")),
+        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#94A3B8")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 10),
+    ]))
+    story.extend([address_table, Spacer(1, 15)])
+
+    line_items = Table([
+        [paragraph("DESCRIPTION", section_style), paragraph("UNIT PRICE", section_style), paragraph("AMOUNT", section_style)],
+        [paragraph(values["A16"]), paragraph(money(values["F16"]), right_total), paragraph(money(values["G16"]), right_total)],
+    ], colWidths=[4.45 * inch, 1.15 * inch, 1.2 * inch], rowHeights=[0.28 * inch, 2.25 * inch])
+    line_items.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#475569")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E2E8F0")),
+        ("ALIGN", (1, 0), (-1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 1), (-1, 1), 8),
+    ]))
+    story.append(line_items)
+
+    totals = Table([
+        [paragraph("<b>Payment Due:</b>", trusted=True), paragraph(values["B27"]), paragraph("<b>SUB-TOTAL:</b>", right_total, trusted=True), paragraph(money(values["G27"]), right_total)],
+        [paragraph("MAKE CHECK PAYABLE TO:", small_style), paragraph("<b>Speed Construction and Development Inc</b>", small_style, trusted=True), paragraph("<b>AMOUNT DUE:</b>", right_total, trusted=True), paragraph(f"<b>{money(values['G30'])}</b>", right_total, trusted=True)],
+    ], colWidths=[1.2 * inch, 3.25 * inch, 1.15 * inch, 1.2 * inch])
+    totals.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#475569")),
+        ("SPAN", (0, 1), (0, 1)),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("BACKGROUND", (2, 1), (-1, 1), colors.HexColor("#F1F5F9")),
+    ]))
+    story.extend([
+        totals,
+        Spacer(1, 12),
+        paragraph("QUESTIONS CONCERNING THIS INVOICE? CALL LOGAN AT 510-415-5834.", centered_small),
+        Spacer(1, 3),
+        paragraph(
+            "Our goal is to serve clients to the best of our ability. If we ever disappoint you, "
+            "we hope you let us know; we will do everything we can to make things right. Thank you "
+            "again for selecting us. It is our privilege to work with you.",
+            centered_small,
+        ),
+        Spacer(1, 4),
+        paragraph("<b>THANK YOU FOR THE OPPORTUNITY TO SERVICE YOUR NEEDS</b>", centered_small, trusted=True),
+    ])
+    document.build(story)
+    return output.getvalue()
+
+
+def build_export(base, body: dict) -> tuple[bytes, str, str]:
     export_type = str(body.get("template") or "").casefold()
     output = io.BytesIO()
     if export_type == "auditor":
@@ -259,25 +443,41 @@ def build_export(base, body: dict) -> tuple[bytes, str]:
             }},
             table_rows={"Sheet1": rows},
         )
-        return output.getvalue(), f"Worker-Compensation-Auditor-{start}-{end}.xlsx"
+        return (
+            output.getvalue(),
+            f"Worker-Compensation-Auditor-{start}-{end}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
     if export_type == "invoice":
         values = invoice_values(body)
+        export_format = str(body.get("format") or "xlsx").casefold()
+        if export_format not in {"xlsx", "pdf"}:
+            raise ValueError("Choose Excel or PDF for the invoice format.")
+        invoice_number = str(values["F3"])
+        if export_format == "pdf":
+            return (
+                _invoice_pdf(values),
+                f"Speed-Invoice-{invoice_number}.pdf",
+                "application/pdf",
+            )
         fill_template_workbook(
             INVOICE_TEMPLATE,
             output,
             cell_updates={"template": values},
         )
-        invoice_number = str(values["F3"])
-        return output.getvalue(), f"Speed-Invoice-{invoice_number}.xlsx"
+        return (
+            output.getvalue(),
+            f"Speed-Invoice-{invoice_number}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
     raise ValueError("Choose Worker Compensation Auditor Report or Speed Invoice.")
 
 
-def _xlsx_response(handler: BaseHTTPRequestHandler, body: bytes, filename: str) -> None:
+def _file_response(
+    handler: BaseHTTPRequestHandler, body: bytes, filename: str, content_type: str,
+) -> None:
     handler.send_response(200)
-    handler.send_header(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
     handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(body)))
@@ -294,8 +494,8 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("The request body must be an object.")
-            content, filename = build_export(DataStore(), body)
-            _xlsx_response(self, content, filename)
+            content, filename, content_type = build_export(DataStore(), body)
+            _file_response(self, content, filename, content_type)
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             json_response(self, {"error": f"Cannot generate export: {error}"}, 400)
         except FileNotFoundError:

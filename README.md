@@ -273,12 +273,15 @@ date, location, or required cost center blocks that proposal.
   only checked workers/sites are included. It exports one row per
   worker/date/site/cost-code allocation, with recorded time, total hours, and
   California regular/OT allocation.
-- **Speed Invoice Template** has its own work filters and asks for Bill To,
-  invoice number/date, payment due, and customer billing rate. The amount is
-  selected labor hours multiplied by this billing rate. Worker payroll rates
-  are intentionally never treated as customer billing rates.
-- Both files are generated from the approved `.xlsx` templates in
+- **Speed Invoice Template** asks for Bill To, Job Address, Description,
+  invoice date, payment terms, Unit Price, and Amount. Its invoice number and
+  fixed Speed Construction information are automatic. The same completed
+  invoice can be downloaded as the approved editable Excel workbook or as a
+  print-ready PDF; both formats use the same invoice number and values.
+- Spreadsheet reports are generated from the approved `.xlsx` templates in
   `templates/`; formatting is retained and the browser downloads the result.
+  Invoice PDFs are rendered directly by the server so deployment does not
+  depend on Microsoft Office or LibreOffice.
 
 ## 5. Entry model and validation rules
 
@@ -594,7 +597,7 @@ All business APIs require Lark login unless marked public.
 | GET | `/api/import/access` | admin-only import access state |
 | GET | `/api/export/access` | export access state |
 | POST | `/api/export/unlock` | issue export password grant |
-| POST | `/api/export/template` | filtered auditor/invoice `.xlsx`; export access |
+| POST | `/api/export/template` | auditor `.xlsx` or invoice `.xlsx`/`.pdf`; export access |
 | GET/POST | `/api/lark/migration` | preview/staged historical import; admin |
 | GET/POST | `/api/database/setup` | inspect/initialize PostgreSQL; admin |
 | GET/POST | `/api/lark/setup` | inspect/initialize Base schema; admin on POST |

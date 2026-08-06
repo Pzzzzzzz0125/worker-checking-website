@@ -740,7 +740,8 @@ The build output is ignored; do not force-add `static/app-ui`.
    loads.
 10. Worker Management access behaves correctly.
 11. Export access behaves correctly; generate one auditor report and one
-    invoice with controlled filters, then open both downloaded `.xlsx` files.
+    controlled invoice. Download and open both the invoice `.xlsx` and `.pdf`,
+    then confirm their invoice number, customer details, and totals match.
 12. `/api/sync/lark` shows no unexpected failures.
 13. Lark Work Log/Sheet eventually reflects the controlled update.
 14. Remove/revert the controlled test data through the application.

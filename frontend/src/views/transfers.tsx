@@ -36,6 +36,12 @@ type Access = {
   admin_allowlist_configured?: boolean
 }
 
+function newInvoiceNumber() {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `SC-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
 export function ImportView() {
   const [access, setAccess] = useState<Access | null>(null)
   const [preview, setPreview] = useState<any>(null)
@@ -182,7 +188,8 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [auditorWorkers, setAuditorWorkers] = useState<Set<string>>(new Set())
   const [auditorSites, setAuditorSites] = useState<Set<string>>(new Set())
   const [auditorLoading, setAuditorLoading] = useState(false)
-  const [invoiceLoading, setInvoiceLoading] = useState(false)
+  const [invoiceLoading, setInvoiceLoading] = useState<"xlsx" | "pdf" | null>(null)
+  const [invoiceNumber, setInvoiceNumber] = useState(newInvoiceNumber)
   const [invoiceDate, setInvoiceDate] = useState(today)
   const [paymentTerms, setPaymentTerms] = useState("Upon Receipt")
   const [billToName, setBillToName] = useState("")
@@ -241,6 +248,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
       setAuditorWorkers(new Set())
       setAuditorSites(new Set())
     }
+    if (nextMode === "invoice") setInvoiceNumber(newInvoiceNumber())
     setMode(nextMode)
     if (nextMode !== "schedule" || workbook) return
     setWorkbookLoading(true)
@@ -274,17 +282,19 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
     }
   }
 
-  const generateInvoice = async () => {
+  const generateInvoice = async (format: "xlsx" | "pdf") => {
     if (!billToName.trim()) return toast.error("Enter the Bill To name.")
     if (!billToAddress.trim()) return toast.error("Enter the Bill To address.")
     if (!jobAddress.trim()) return toast.error("Enter the Job address.")
     if (!invoiceDescription.trim()) return toast.error("Enter the invoice Description.")
     if (Number(unitPrice) <= 0) return toast.error("Enter a Unit price greater than 0.")
     if (Number(invoiceAmount) <= 0) return toast.error("Enter an Amount greater than 0.")
-    setInvoiceLoading(true)
+    setInvoiceLoading(format)
     try {
       const filename = await downloadJSON("/api/export/template", {
         template: "invoice",
+        format,
+        invoice_number: invoiceNumber,
         invoice_date: invoiceDate,
         payment_terms: paymentTerms,
         bill_to_name: billToName,
@@ -301,7 +311,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
-      setInvoiceLoading(false)
+      setInvoiceLoading(null)
     }
   }
 
@@ -370,7 +380,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   if (mode === "invoice") return <div className="page">
     {header("Speed Invoice Template", "Complete only the customer, job, and invoice details. Speed Construction information and the invoice number are automatic.")}
     <div className="grid gap-5">
-      <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Fixed invoice information</CardTitle><CardDescription>These company and numbering fields are inserted automatically and cannot be changed here.</CardDescription></div><Badge variant="secondary">Automatic</Badge></div></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><div className="rounded-xl border bg-slate-50 p-4 text-sm"><strong className="block">Speed Construction</strong><p className="mt-1 text-muted-foreground">Lic. #1098660 · Logan Du<br/>10275 N De Anza Blvd, Cupertino, CA 95014<br/>(510) 415-5834 · logan@speedcons.com</p></div><div className="rounded-xl border bg-blue-50 p-4 text-sm"><strong className="block text-primary">Invoice number</strong><p className="mt-1 text-muted-foreground">Generated automatically when the file is created.</p></div></CardContent></Card>
+      <Card><CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>Fixed invoice information</CardTitle><CardDescription>These company and numbering fields are inserted automatically and cannot be changed here.</CardDescription></div><Badge variant="secondary">Automatic</Badge></div></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><div className="rounded-xl border bg-slate-50 p-4 text-sm"><strong className="block">Speed Construction</strong><p className="mt-1 text-muted-foreground">Lic. #1098660 · Logan Du<br/>10275 N De Anza Blvd, Cupertino, CA 95014<br/>(510) 415-5834 · logan@speedcons.com</p></div><div className="rounded-xl border bg-blue-50 p-4 text-sm"><strong className="block text-primary">Invoice number</strong><p className="mt-1 font-semibold tabular-nums text-foreground">{invoiceNumber}</p><p className="mt-1 text-xs text-muted-foreground">Excel and PDF use this same number.</p></div></CardContent></Card>
 
       <Card><CardHeader><CardTitle>1. Bill To</CardTitle><CardDescription>Information for the customer receiving this invoice.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
         <label className="field-label sm:col-span-2">Customer or company name<Input value={billToName} onChange={event => setBillToName(event.target.value)} placeholder="e.g. 5A Holdings LLC" /></label>
@@ -395,7 +405,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
         <label className="field-label">Payment terms<Input list="payment-terms" value={paymentTerms} onChange={event => setPaymentTerms(event.target.value)} placeholder="Upon Receipt" /><datalist id="payment-terms"><option value="Upon Receipt"/><option value="Net 15"/><option value="Net 30"/></datalist></label>
       </CardContent></Card>
 
-      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Invoice total</strong><p className="text-2xl font-bold tabular-nums text-primary">${Number(invoiceAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div><Button size="lg" onClick={() => void generateInvoice()} disabled={invoiceLoading}>{invoiceLoading?<LoaderCircle className="size-4 animate-spin"/>:<Receipt className="size-4" />}{invoiceLoading?"Generating invoice…":"Download Speed invoice"}</Button></CardContent></Card>
+      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Invoice total</strong><p className="text-2xl font-bold tabular-nums text-primary">${Number(invoiceAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p><p className="mt-1 text-xs text-muted-foreground">Choose the format you need. Both files contain the same invoice data.</p></div><div className="flex flex-col gap-2 sm:flex-row"><Button size="lg" variant="outline" onClick={() => void generateInvoice("xlsx")} disabled={invoiceLoading !== null}>{invoiceLoading==="xlsx"?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{invoiceLoading==="xlsx"?"Generating Excel…":"Download Excel"}</Button><Button size="lg" onClick={() => void generateInvoice("pdf")} disabled={invoiceLoading !== null}>{invoiceLoading==="pdf"?<LoaderCircle className="size-4 animate-spin"/>:<FileText className="size-4" />}{invoiceLoading==="pdf"?"Generating PDF…":"Download PDF"}</Button></div></CardContent></Card>
     </div>
   </div>
 

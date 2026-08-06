@@ -7,6 +7,7 @@ from report_handlers.exports import (
     AUDITOR_TEMPLATE,
     INVOICE_TEMPLATE,
     _filters,
+    _invoice_pdf,
     auditor_rows,
     invoice_values,
 )
@@ -131,6 +132,25 @@ class ExportTests(unittest.TestCase):
             "amount": 100,
         })
         self.assertRegex(str(values["F3"]), r"^SC-\d{8}-\d{6}$")
+
+    def test_invoice_pdf_is_a_valid_named_pdf(self):
+        values = invoice_values({
+            "bill_to_name": "Example Customer",
+            "bill_to_address": "500 Market St, San Jose, CA 95113",
+            "bill_to_phone": "408-555-0100",
+            "bill_to_email": "billing@example.com",
+            "job_address": "100 Main St",
+            "job_address_detail": "San Jose, CA 95112",
+            "description": "First progress payment",
+            "invoice_number": "INV-42",
+            "invoice_date": "2026-07-07",
+            "payment_terms": "Upon Receipt",
+            "unit_price": 750,
+            "amount": 750,
+        })
+        pdf = _invoice_pdf(values)
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertGreater(len(pdf), 10_000)
 
     def test_templates_generate_valid_xlsx_packages(self):
         auditor_output = io.BytesIO()
