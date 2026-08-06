@@ -45,6 +45,10 @@
       "destination": "/api/reports?action=export_template"
     },
     {
+      "source": "/api/settings/access",
+      "destination": "/api/reports?action=settings_access"
+    },
+    {
       "source": "/api/payroll/access",
       "destination": "/api/reports?action=payroll_access"
     },

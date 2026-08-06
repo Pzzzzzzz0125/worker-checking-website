@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
+from api._permissions import admin_ids as permission_admin_ids, is_super_admin
 from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
@@ -214,15 +215,11 @@ def session(handler: BaseHTTPRequestHandler) -> dict | None:
 
 
 def admin_ids() -> set[str]:
-    return {
-        value.strip()
-        for value in os.environ.get("LARK_ADMIN_OPEN_IDS", "").split(",")
-        if value.strip()
-    }
+    return permission_admin_ids()
 
 
 def access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dict:
-    is_lark_admin = current_session.get("sub") in admin_ids()
+    is_lark_admin = is_super_admin(current_session)
     password_session = verify_payload(
         cookie_value(handler, "worker_admin_session"), 8 * 60 * 60,
     )
@@ -247,7 +244,7 @@ def access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dic
 
 def payroll_access_status(handler: BaseHTTPRequestHandler, current_session: dict) -> dict:
     """Payroll and site costs share one read-sensitive permission scope."""
-    is_lark_admin = current_session.get("sub") in admin_ids()
+    is_lark_admin = is_super_admin(current_session)
     password_session = verify_payload(
         cookie_value(handler, "payroll_access_session"), 8 * 60 * 60,
     )

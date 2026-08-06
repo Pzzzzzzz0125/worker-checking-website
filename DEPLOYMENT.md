@@ -166,6 +166,12 @@ https://<production-domain>/api/auth/me
 Add only the `open_id` string to `LARK_ADMIN_OPEN_IDS`. Separate multiple IDs
 with commas and no quotes.
 
+This allowlist is the bootstrap and recovery Super Admin list. After deployment,
+users open **Settings & access** once to register their Lark identity, then
+request Entry user or Schedule manager access. A Super Admin approves requests
+or assigns roles in the same page. Only an existing Super Admin can assign a new
+Super Admin; ordinary users cannot request that role.
+
 ### Protected pages
 
 | Variable | Required | Meaning |
@@ -731,20 +737,24 @@ The build output is ignored; do not force-add `static/app-ui`.
 1. `/api/health` returns HTTP 200 and `data_backend: postgres`.
 2. Sign in with an approved Lark user.
 3. Overview loads and date filtering works.
-4. Daily Entry finds workers and cost codes.
-5. Save a controlled test record or use an approved existing record.
-6. Reload and confirm persistence.
-7. Payroll unlock and one pay period load.
-8. Worker detail expands immediately below the row.
-9. The same Payroll password grant opens Site Check and one known site
+4. Open Settings & access and confirm the signed-in Lark ID and role. For a
+   non-admin test account, submit a request and approve it from a Super Admin
+   account.
+5. Daily Entry finds workers and cost codes for an Entry user or above; Viewer
+   cannot save an Entry.
+6. Save a controlled test record or use an approved existing record.
+7. Reload and confirm persistence.
+8. Payroll unlock and one pay period load.
+9. Worker detail expands immediately below the row.
+10. The same Payroll password grant opens Site Check and one known site
    loads.
-10. Worker Management access behaves correctly.
-11. Export access behaves correctly; generate one auditor report and one
+11. Worker Management access behaves correctly.
+12. Export access behaves correctly; generate one auditor report and one
     controlled invoice. Download and open both the invoice `.xlsx` and `.pdf`,
     then confirm their invoice number, customer details, and totals match.
-12. `/api/sync/lark` shows no unexpected failures.
-13. Lark Work Log/Sheet eventually reflects the controlled update.
-14. Remove/revert the controlled test data through the application.
+13. `/api/sync/lark` shows no unexpected failures.
+14. Lark Work Log/Sheet eventually reflects the controlled update.
+15. Remove/revert the controlled test data through the application.
 
 ### Rollback code
 

@@ -16,6 +16,7 @@ from api._shared import (
     verify_payload,
 )
 from report_handlers.workers import admin_ids, session
+from api._permissions import is_super_admin
 
 
 def action(handler: BaseHTTPRequestHandler) -> str:
@@ -23,9 +24,10 @@ def action(handler: BaseHTTPRequestHandler) -> str:
 
 
 def import_access_status(current_session: dict) -> dict:
+    authorized = is_super_admin(current_session)
     return {
-        "authorized": current_session.get("sub") in admin_ids(),
-        "access_type": "lark_admin" if current_session.get("sub") in admin_ids() else "",
+        "authorized": authorized,
+        "access_type": "lark_admin" if authorized else "",
         "admin_allowlist_configured": bool(admin_ids()),
     }
 

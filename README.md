@@ -543,11 +543,34 @@ worker/date cells.
 
 The Lark App Secret and access token never enter frontend JavaScript.
 
-### Current access model
+### Role and access model
+
+Opening **Settings & access** automatically registers the signed-in Lark open
+ID; users never type an ID. New registered users start as `Viewer only` and can
+request `Entry user` or `Schedule manager`. The request appears in the Super
+Admin queue. Super Admin approval changes the role immediately.
+
+The four hierarchical roles are:
+
+| Role | Capability |
+| --- | --- |
+| Viewer only | view authorized non-editing pages |
+| Entry user | Viewer plus Daily/Worker Entry, AI entry, and payroll check updates |
+| Schedule manager | Entry access plus future Schedule conflict approval |
+| Super admin | full role approval/assignment and application administration |
+
+`Super admin` cannot be self-requested. An existing Super Admin must assign it.
+`LARK_ADMIN_OPEN_IDS` remains the bootstrap/recovery allowlist and always wins
+over a stored role, so the application cannot demote its recovery administrator.
+Roles and requests are stored in PostgreSQL tables `workforce_app_users` and
+`workforce_access_requests`, which are created idempotently on first use.
 
 | Capability | Requirement |
 | --- | --- |
-| Normal pages and entry | valid Lark session |
+| Normal read-only pages | valid Lark session; registered role defaults to Viewer |
+| Entry/AI writes and payroll checked-state changes | Entry user or above |
+| Schedule conflict approval (when Schedule is added) | Schedule manager or above |
+| Settings role approval/assignment | Super admin only |
 | Payroll and Site Check | Lark admin or shared `PAYROLL_PASSWORD` grant |
 | Worker management | Lark admin or `WORKER_ADMIN_PASSWORD` grant |
 | Import/migration | Lark admin only |
@@ -598,6 +621,7 @@ All business APIs require Lark login unless marked public.
 | GET | `/api/export/access` | export access state |
 | POST | `/api/export/unlock` | issue export password grant |
 | POST | `/api/export/template` | auditor `.xlsx` or invoice `.xlsx`/`.pdf`; export access |
+| GET/POST | `/api/settings/access` | current role/request; apply/review/assign roles |
 | GET/POST | `/api/lark/migration` | preview/staged historical import; admin |
 | GET/POST | `/api/database/setup` | inspect/initialize PostgreSQL; admin |
 | GET/POST | `/api/lark/setup` | inspect/initialize Base schema; admin on POST |

@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 from api._lark import LarkAPIError
+from api._permissions import require_role
 from api._data_store import DataStore
 from api._lark_base import (
     LarkBase,
@@ -546,6 +547,8 @@ class handler(BaseHTTPRequestHandler):
         current_session = session(self)
         if not current_session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
+            return
+        if not require_role(self, current_session, "entry_user"):
             return
         try:
             body = read_body(self)

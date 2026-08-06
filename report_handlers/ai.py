@@ -8,6 +8,7 @@ from pathlib import Path
 
 from api._lark import LarkAPIError
 from api._data_store import DataStore
+from api._permissions import require_role
 from api._lark_base import LarkBase, bool_value, field, text_value
 from api._shared import json_response
 from gemini_parser import extract_work_records
@@ -290,8 +291,11 @@ def apply_records(base: LarkBase, proposed: list[dict]) -> dict:
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
-        if not session(self):
+        current_session = session(self)
+        if not current_session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
+            return
+        if not require_role(self, current_session, "entry_user"):
             return
         try:
             body = read_body(self)

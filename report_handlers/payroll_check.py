@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from api._lark import LarkAPIError
 from api._data_store import DataStore
+from api._permissions import require_role
 from api._shared import cookie_value, json_response, verify_payload
 
 
@@ -19,6 +20,8 @@ class handler(BaseHTTPRequestHandler):
         session = verify_payload(cookie_value(self, "workforce_session"), 12 * 60 * 60)
         if not session:
             json_response(self, {"error": "Sign in with Lark first."}, 401)
+            return
+        if not require_role(self, session, "entry_user"):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
