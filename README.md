@@ -567,6 +567,11 @@ over a stored role, so the application cannot demote its recovery administrator.
 Roles and requests are stored in PostgreSQL tables `workforce_app_users` and
 `workforce_access_requests`, which are created idempotently on first use.
 
+Schedule records require a date, active worker, Site, at least one Cost Code,
+and a work task. Schedule times are optional. A worker assigned to overlapping
+different Sites is stored as `pending_approval` and cannot be confirmed until a
+Schedule manager resolves the conflict.
+
 | Capability | Requirement |
 | --- | --- |
 | Normal read-only pages | valid Lark session; registered role defaults to Viewer |

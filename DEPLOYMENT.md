@@ -173,7 +173,7 @@ or assigns roles in the same page. Only an existing Super Admin can assign a new
 Super Admin; ordinary users cannot request that role.
 
 Schedule is restricted to Schedule managers and Super Admins. Every schedule
-requires a date, active worker, Site, and work task. Times are optional, but two
+requires a date, active worker, Site, at least one Cost Code, and work task. Times are optional, but two
 different Sites for the same worker on the same day are stored only as
 `pending_approval`; they cannot become a confirmed schedule until a Schedule
 manager resolves or approves the conflict. Pending rows are not copied into

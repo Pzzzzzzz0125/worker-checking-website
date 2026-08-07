@@ -89,6 +89,16 @@ def _workers(base) -> dict[str, dict]:
     return result
 
 
+def _cost_codes(base) -> dict[str, str]:
+    result = {}
+    for record in base.records("Cost Centers", cache_seconds=300):
+        code = text_value(field(record, "Cost Center ID"))
+        name = text_value(field(record, "Name"))
+        if code and name and bool_value(field(record, "Active"), True):
+            result[code] = name
+    return result
+
+
 def _row(record: dict) -> dict:
     values = record.get("fields") or {}
     return {
@@ -97,6 +107,8 @@ def _row(record: dict) -> dict:
         "worker_name": text_value(values.get("Worker Name")),
         "schedule_date": text_value(values.get("Schedule Date")),
         "site": text_value(values.get("Site")),
+        "cost_code_ids": [value for value in text_value(values.get("Cost Code IDs")).split(";") if value],
+        "cost_code_names": [value for value in text_value(values.get("Cost Code Names")).split(";") if value],
         "task": text_value(values.get("Task")),
         "start_time": text_value(values.get("Start Time")),
         "end_time": text_value(values.get("End Time")),
@@ -146,11 +158,20 @@ def _conflict_reason(candidate: dict, existing: list[dict]) -> str:
     return " ".join(dict.fromkeys(reasons))
 
 
-def _payload(body: dict, worker: dict, current: dict | None = None) -> dict:
+def _payload(body: dict, worker: dict, cost_codes: dict[str, str], current: dict | None = None) -> dict:
     site = _clean(body.get("site"), 240)
     task = _clean(body.get("task"), 240)
     if not site:
         raise ValueError("Site is required for every schedule.")
+    supplied_codes = body.get("cost_code_ids")
+    if not isinstance(supplied_codes, list):
+        supplied_codes = []
+    selected_codes = list(dict.fromkeys(_clean(value, 120) for value in supplied_codes if _clean(value, 120)))
+    if not selected_codes:
+        raise ValueError("At least one Cost Code is required for every schedule.")
+    unknown_codes = [value for value in selected_codes if value not in cost_codes]
+    if unknown_codes:
+        raise ValueError("Choose Cost Codes from the active Cost Code list.")
     if not task:
         raise ValueError("Work task is required for every schedule.")
     start = _clean(body.get("start_time"), 20)
@@ -166,6 +187,8 @@ def _payload(body: dict, worker: dict, current: dict | None = None) -> dict:
         "Worker Name": worker["worker_name"],
         "Schedule Date": schedule_date,
         "Site": site,
+        "Cost Code IDs": ";".join(selected_codes),
+        "Cost Code Names": ";".join(cost_codes[value] for value in selected_codes),
         "Task": task,
         "Start Time": start,
         "End Time": end,
@@ -186,7 +209,7 @@ def _save(base, body: dict, session: dict) -> dict:
         (item for item in current_rows if item["schedule_key"] == _clean(body.get("schedule_key"), 120)),
         None,
     )
-    fields = _payload(body, worker, current)
+    fields = _payload(body, worker, _cost_codes(base), current)
     candidate = _row({"record_id": current.get("record_id", "") if current else "", "fields": fields})
     conflict = _conflict_reason(candidate, current_rows)
     now = _iso_now()
@@ -241,6 +264,8 @@ def _review(base, body: dict, session: dict) -> dict:
         "Worker Name": current["worker_name"],
         "Schedule Date": current["schedule_date"],
         "Site": current["site"],
+        "Cost Code IDs": ";".join(current["cost_code_ids"]),
+        "Cost Code Names": ";".join(current["cost_code_names"]),
         "Task": current["task"],
         "Start Time": current["start_time"],
         "End Time": current["end_time"],
@@ -269,6 +294,7 @@ def _cancel(base, body: dict, session: dict) -> dict:
         "Schedule Key": current["schedule_key"], "Worker Key": current["worker_key"],
         "Worker Name": current["worker_name"], "Schedule Date": current["schedule_date"],
         "Site": current["site"], "Task": current["task"], "Start Time": current["start_time"],
+        "Cost Code IDs": ";".join(current["cost_code_ids"]), "Cost Code Names": ";".join(current["cost_code_names"]),
         "End Time": current["end_time"], "Notes": current["notes"], "Status": "cancelled",
         "Conflict Reason": current["conflict_reason"], "Submitted By": current["submitted_by"],
         "Submitted By Name": current["submitted_by_name"], "Reviewed By": _clean(session.get("sub"), 160),

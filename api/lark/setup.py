@@ -99,6 +99,8 @@ SCHEMA = {
         ("Worker Name", TEXT),
         ("Schedule Date", DATE),
         ("Site", TEXT),
+        ("Cost Code IDs", TEXT),
+        ("Cost Code Names", TEXT),
         ("Task", TEXT),
         ("Start Time", TEXT),
         ("End Time", TEXT),

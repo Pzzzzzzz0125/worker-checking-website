@@ -15,6 +15,8 @@ type ScheduleRow = {
   worker_name: string
   schedule_date: string
   site: string
+  cost_code_ids: string[]
+  cost_code_names: string[]
   task: string
   start_time: string
   end_time: string
@@ -30,6 +32,7 @@ type FormState = {
   schedule_date: string
   worker_key: string
   site: string
+  cost_code_ids: string[]
   task: string
   start_time: string
   end_time: string
@@ -50,7 +53,7 @@ function shift(value: string, days: number) {
 }
 
 function emptyForm(date: string): FormState {
-  return { schedule_key: "", schedule_date: date, worker_key: "", site: "", task: "", start_time: "", end_time: "", notes: "" }
+  return { schedule_key: "", schedule_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "" }
 }
 
 function statusBadge(status: ScheduleRow["status"]) {
@@ -97,6 +100,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     schedule_date: row.schedule_date,
     worker_key: row.worker_key,
     site: row.site,
+    cost_code_ids: row.cost_code_ids,
     task: row.task,
     start_time: row.start_time,
     end_time: row.end_time,
@@ -105,8 +109,8 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!form.worker_key || !form.site.trim() || !form.task.trim()) {
-      toast.error("Choose a worker and enter both Site and work task.")
+    if (!form.worker_key || !form.site.trim() || !form.task.trim() || !form.cost_code_ids.length) {
+      toast.error("Choose a worker, Site, Cost Code, and work task.")
       return
     }
     setSaving(true)
@@ -149,9 +153,21 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     }
   }
 
+  const [costCodeSearch, setCostCodeSearch] = useState("")
+  const visibleCostCodes = bootstrap.cost_centers.filter(code => {
+    const needle = costCodeSearch.trim().toLowerCase()
+    return !needle || `${code.id} ${code.name}`.toLowerCase().includes(needle)
+  }).slice(0, 80)
+  const toggleCostCode = (id: string) => setForm(current => ({
+    ...current,
+    cost_code_ids: current.cost_code_ids.includes(id)
+      ? current.cost_code_ids.filter(value => value !== id)
+      : [...current.cost_code_ids, id],
+  }))
+
   return <div className="page">
     <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-      <div><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><CalendarClock className="size-3" />Schedule manager only</div><h1 className="page-title">Schedule</h1><p className="page-subtitle">Plan who goes to which Site and what they will do. Site and task are required; schedule times are optional.</p></div>
+      <div><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><CalendarClock className="size-3" />Schedule manager only</div><h1 className="page-title">Schedule</h1><p className="page-subtitle">Plan who goes to which Site, under which Cost Code, and what they will do. Site, Cost Code, and task are required; schedule times are optional.</p></div>
       <div className="flex items-center gap-2"><Button variant="outline" size="icon" onClick={() => setWeekStart(value => shift(value, -7))}><ChevronLeft className="size-4" /></Button><div className="min-w-44 text-center text-sm font-semibold">{displayDate(weekStart, true)} – {displayDate(weekEnd, true)}</div><Button variant="outline" size="icon" onClick={() => setWeekStart(value => shift(value, 7))}><ChevronRight className="size-4" /></Button><Button variant="outline" onClick={() => setWeekStart(monday(localISO()))}><RotateCcw className="size-4" />This week</Button></div>
     </div>
 
@@ -162,6 +178,11 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
           <label className="field-label">Date<Input type="date" value={form.schedule_date} onChange={event => setField("schedule_date", event.target.value)} required /></label>
           <label className="field-label">Worker<select className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm" value={form.worker_key} onChange={event => setField("worker_key", event.target.value)} required><option value="">Select worker…</option>{workers.map(worker => <option key={worker.worker_key || worker.id} value={worker.worker_key || String(worker.id)}>{worker.name}</option>)}</select></label>
           <label className="field-label">Site<Input list="locations" value={form.site} onChange={event => setField("site", event.target.value)} placeholder="Select or enter a Site" required /></label>
+        </div>
+        <div className="grid gap-3 rounded-xl border bg-slate-50 p-3">
+          <label className="field-label">Cost Code <span className="text-red-600">required</span><Input value={costCodeSearch} onChange={event => setCostCodeSearch(event.target.value)} placeholder="Search by Cost Code ID or name…" /></label>
+          <div className="flex flex-wrap gap-2">{form.cost_code_ids.map(id => { const code = bootstrap.cost_centers.find(item => item.id === id); return <button type="button" key={id} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-900" onClick={() => toggleCostCode(id)}>{code ? `${code.name} (${code.id})` : id} ×</button> })}{!form.cost_code_ids.length && <span className="text-xs text-red-700">Select at least one Cost Code.</span>}</div>
+          <div className="grid max-h-40 gap-1 overflow-auto rounded-lg border bg-white p-2 sm:grid-cols-2">{visibleCostCodes.map(code => <label key={code.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-blue-50"><input type="checkbox" checked={form.cost_code_ids.includes(code.id)} onChange={() => toggleCostCode(code.id)} /><span className="truncate">{code.name} <span className="text-muted-foreground">({code.id})</span></span></label>)}{!visibleCostCodes.length && <span className="p-2 text-xs text-muted-foreground">No Cost Codes match.</span>}</div>
         </div>
         <div className="grid gap-4 md:grid-cols-[1.2fr_.4fr_.4fr]">
           <label className="field-label">Work task<Input value={form.task} onChange={event => setField("task", event.target.value)} placeholder="e.g. Framing, cleanup, inspection" required /></label>
@@ -174,8 +195,8 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     </Card>
 
     <Card>
-      <CardHeader><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><CardTitle>Weekly assignments</CardTitle><CardDescription>Confirmed schedules can be copied to Entry later. Pending conflicts stay out of Entry until approved.</CardDescription></div><Input className="sm:max-w-xs" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search worker, Site, task…" /></div></CardHeader>
-      <CardContent>{loading ? <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading schedule…</div> : visibleRows.length ? <div className="grid gap-3">{visibleRows.map(row => <div key={row.schedule_key} className={`rounded-xl border p-4 ${row.status === "pending_approval" ? "border-amber-300 bg-amber-50/50" : row.status === "rejected" || row.status === "cancelled" ? "opacity-60" : ""}`}><div className="flex flex-col gap-3 lg:flex-row lg:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong>{displayDate(row.schedule_date, true)}</strong>{statusBadge(row.status)}{row.status === "pending_approval" && <AlertTriangle className="size-4 text-amber-600" />}</div><p className="mt-1 text-sm"><strong>{row.worker_name}</strong><span className="mx-2 text-muted-foreground">·</span>{row.site}<span className="mx-2 text-muted-foreground">·</span>{row.task}</p><p className="mt-1 text-xs text-muted-foreground">{row.start_time && row.end_time ? `${row.start_time}–${row.end_time}` : "Time not set"}{row.notes ? ` · ${row.notes}` : ""}</p>{row.conflict_reason && <p className="mt-2 text-xs font-semibold text-amber-800">{row.conflict_reason}</p>}{row.submitted_by_name && <p className="mt-2 text-[11px] text-muted-foreground">Submitted by {row.submitted_by_name}{row.reviewed_by_name ? ` · reviewed by ${row.reviewed_by_name}` : ""}</p>}</div><div className="flex flex-wrap gap-2 lg:justify-end">{row.status === "pending_approval" && <><Button size="sm" variant="outline" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "rejected")}><X className="size-4" />Reject</Button><Button size="sm" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "approved")}><Check className="size-4" />Approve</Button></>}{row.status !== "cancelled" && row.status !== "rejected" && <><Button size="sm" variant="outline" onClick={() => edit(row)}><Edit3 className="size-4" />Edit</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" disabled={reviewing === row.schedule_key} onClick={() => void cancel(row)}><X className="size-4" />Cancel</Button></>}</div></div></div>)}</div> : <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No schedules for this week.</div>}</CardContent>
+      <CardHeader><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><CardTitle>Weekly assignments</CardTitle><CardDescription>Confirmed schedules can be copied to Entry later. Pending conflicts stay out of Entry until approved.</CardDescription></div><Input className="sm:max-w-xs" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search worker, Site, Cost Code…" /></div></CardHeader>
+        <CardContent>{loading ? <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading schedule…</div> : visibleRows.length ? <div className="grid gap-3">{visibleRows.map(row => <div key={row.schedule_key} className={`rounded-xl border p-4 ${row.status === "pending_approval" ? "border-amber-300 bg-amber-50/50" : row.status === "rejected" || row.status === "cancelled" ? "opacity-60" : ""}`}><div className="flex flex-col gap-3 lg:flex-row lg:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong>{displayDate(row.schedule_date, true)}</strong>{statusBadge(row.status)}{row.status === "pending_approval" && <AlertTriangle className="size-4 text-amber-600" />}</div><p className="mt-1 text-sm"><strong>{row.worker_name}</strong><span className="mx-2 text-muted-foreground">·</span>{row.site}<span className="mx-2 text-muted-foreground">·</span>{row.task}</p><p className="mt-1 text-xs text-muted-foreground">Cost Code: {row.cost_code_names.length ? row.cost_code_names.join(", ") : "—"}{row.start_time && row.end_time ? ` · ${row.start_time}–${row.end_time}` : " · Time not set"}{row.notes ? ` · ${row.notes}` : ""}</p>{row.conflict_reason && <p className="mt-2 text-xs font-semibold text-amber-800">{row.conflict_reason}</p>}{row.submitted_by_name && <p className="mt-2 text-[11px] text-muted-foreground">Submitted by {row.submitted_by_name}{row.reviewed_by_name ? ` · reviewed by ${row.reviewed_by_name}` : ""}</p>}</div><div className="flex flex-wrap gap-2 lg:justify-end">{row.status === "pending_approval" && <><Button size="sm" variant="outline" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "rejected")}><X className="size-4" />Reject</Button><Button size="sm" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "approved")}><Check className="size-4" />Approve</Button></>}{row.status !== "cancelled" && row.status !== "rejected" && <><Button size="sm" variant="outline" onClick={() => edit(row)}><Edit3 className="size-4" />Edit</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" disabled={reviewing === row.schedule_key} onClick={() => void cancel(row)}><X className="size-4" />Cancel</Button></>}</div></div></div>)}</div> : <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No schedules for this week.</div>}</CardContent>
     </Card>
   </div>
 }
