@@ -49,6 +49,10 @@
       "destination": "/api/reports?action=settings_access"
     },
     {
+      "source": "/api/schedule",
+      "destination": "/api/reports?action=schedule"
+    },
+    {
       "source": "/api/payroll/access",
       "destination": "/api/reports?action=payroll_access"
     },

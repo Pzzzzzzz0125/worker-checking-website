@@ -42,6 +42,7 @@ def build_bootstrap(base: LarkBase) -> dict:
         workers.append(
             {
                 "id": worker_id(field(record, "Worker Key"), index),
+                "worker_key": text_value(field(record, "Worker Key")),
                 "name": name,
                 "active": 1 if bool_value(field(record, "Active"), True) else 0,
             }

@@ -558,7 +558,7 @@ The four hierarchical roles are:
 | --- | --- |
 | Viewer only | view authorized non-editing pages |
 | Entry user | Viewer plus Daily/Worker Entry, AI entry, and payroll check updates |
-| Schedule manager | Entry access plus future Schedule conflict approval |
+| Schedule manager | Entry access plus weekly Schedule creation and conflict approval |
 | Super admin | full role approval/assignment and application administration |
 
 `Super admin` cannot be self-requested. An existing Super Admin must assign it.
@@ -571,7 +571,7 @@ Roles and requests are stored in PostgreSQL tables `workforce_app_users` and
 | --- | --- |
 | Normal read-only pages | valid Lark session; registered role defaults to Viewer |
 | Entry/AI writes and payroll checked-state changes | Entry user or above |
-| Schedule conflict approval (when Schedule is added) | Schedule manager or above |
+| Schedule creation and conflict approval | Schedule manager or above |
 | Settings role approval/assignment | Super admin only |
 | Payroll and Site Check | Lark admin or shared `PAYROLL_PASSWORD` grant |
 | Worker management | Lark admin or `WORKER_ADMIN_PASSWORD` grant |
@@ -624,6 +624,7 @@ All business APIs require Lark login unless marked public.
 | POST | `/api/export/unlock` | issue export password grant |
 | POST | `/api/export/template` | auditor `.xlsx` or invoice `.xlsx`/`.pdf`; export access |
 | GET/POST | `/api/settings/access` | current role/request; apply/review/assign roles |
+| GET/POST | `/api/schedule` | weekly assignments; conflicting rows require approval |
 | GET/POST | `/api/lark/migration` | preview/staged historical import; admin |
 | GET/POST | `/api/database/setup` | inspect/initialize PostgreSQL; admin |
 | GET/POST | `/api/lark/setup` | inspect/initialize Base schema; admin on POST |

@@ -5,8 +5,8 @@ import os
 from http.server import BaseHTTPRequestHandler
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase
-from api._postgres_base import KEY_FIELDS, PostgresBase
+from api._lark_base import LarkBase, REQUIRED_TABLES
+from api._postgres_base import PostgresBase
 from api._shared import json_response
 from report_handlers.workers import admin_ids, session
 
@@ -47,7 +47,7 @@ class handler(BaseHTTPRequestHandler):
             missing = database.missing_tables()
             counts = {
                 table_name: len(database.records(table_name, cache_seconds=0))
-                for table_name in sorted(KEY_FIELDS)
+                for table_name in sorted(REQUIRED_TABLES)
             } if not missing else {}
             json_response(
                 self,
@@ -84,14 +84,14 @@ class handler(BaseHTTPRequestHandler):
             copied = {}
             if body.get("copy_from_lark", True):
                 source = LarkBase()
-                for table_name in KEY_FIELDS:
+                for table_name in REQUIRED_TABLES:
                     copied[table_name] = database.import_records(
                         table_name,
                         source.records(table_name, cache_seconds=0),
                     )
             counts = {
                 table_name: len(database.records(table_name, cache_seconds=0))
-                for table_name in sorted(KEY_FIELDS)
+                for table_name in sorted(REQUIRED_TABLES)
             }
             json_response(
                 self,

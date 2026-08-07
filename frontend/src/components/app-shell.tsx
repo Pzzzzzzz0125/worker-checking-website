@@ -1,16 +1,19 @@
-import { AlertTriangle, BrainCircuit, CalendarDays, CheckCircle2, ClipboardCheck, Download, LayoutDashboard, LoaderCircle, MapPin, Menu, Settings, Upload, UserRound, Users, X } from "lucide-react"
+import { AlertTriangle, BrainCircuit, CalendarDays, CalendarClock, CheckCircle2, ClipboardCheck, Download, LayoutDashboard, LoaderCircle, MapPin, Menu, Settings, Upload, UserRound, Users, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { api, type LarkSyncStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-export type View = "overview" | "payroll" | "sites" | "ai" | "daily" | "worker" | "workers" | "import" | "export" | "settings"
+export type View = "overview" | "payroll" | "sites" | "ai" | "daily" | "worker" | "schedule" | "workers" | "import" | "export" | "settings"
 const groups: { label: string; items: { id: View; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { label: "Check", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "sites", label: "Sites", icon: MapPin },
   ]},
   { label: "Record", items: [
     { id: "ai", label: "AI reading", icon: BrainCircuit }, { id: "daily", label: "Daily entry", icon: CalendarDays }, { id: "worker", label: "Worker entry", icon: UserRound },
+  ]},
+  { label: "Plan", items: [
+    { id: "schedule", label: "Schedule", icon: CalendarClock },
   ]},
   { label: "Data", items: [
     { id: "workers", label: "Workers", icon: Users }, { id: "import", label: "Import", icon: Upload }, { id: "export", label: "Export", icon: Download },
@@ -25,6 +28,7 @@ export function AppShell({ view, setView, children }: { view: View; setView: (v:
   const [open, setOpen] = useState(false)
   const [sync, setSync] = useState<LarkSyncStatus | null>(null)
   const [canEnter, setCanEnter] = useState<boolean | null>(null)
+  const [canManageSchedule, setCanManageSchedule] = useState<boolean | null>(null)
   const [pendingAccess, setPendingAccess] = useState(0)
   useEffect(() => {
     const update = (event: Event) => setSync((event as CustomEvent<LarkSyncStatus>).detail)
@@ -34,6 +38,7 @@ export function AppShell({ view, setView, children }: { view: View; setView: (v:
   useEffect(() => {
     const apply = (value: any) => {
       setCanEnter(Boolean(value?.permissions?.can_enter))
+      setCanManageSchedule(Boolean(value?.permissions?.can_manage_schedule))
       setPendingAccess(Array.isArray(value?.pending_requests) ? value.pending_requests.length : 0)
     }
     void api<any>("/api/settings/access").then(apply).catch(() => setCanEnter(null))
@@ -46,13 +51,18 @@ export function AppShell({ view, setView, children }: { view: View; setView: (v:
       ...group,
       items: group.label === "Record" && canEnter === false ? [] : group.items,
     }))
+    .map(group => ({
+      ...group,
+      items: group.label === "Plan" && canManageSchedule !== true ? [] : group.items,
+    }))
     .filter(group => group.items.length)
   const visibleItems = visibleGroups.flatMap(group => group.items)
   useEffect(() => {
     if (canEnter === false && (["ai", "daily", "worker"] as View[]).includes(view)) {
       setView("settings")
     }
-  }, [canEnter, view, setView])
+    if (canManageSchedule === false && view === "schedule") setView("settings")
+  }, [canEnter, canManageSchedule, view, setView])
   const active = allItems.find(i => i.id === view)!
   const navigate = (id: View) => { setView(id); setOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }) }
   const syncLabel = !sync || sync.phase === "disabled"

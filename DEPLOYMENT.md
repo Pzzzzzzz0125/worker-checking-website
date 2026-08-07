@@ -172,6 +172,13 @@ request Entry user or Schedule manager access. A Super Admin approves requests
 or assigns roles in the same page. Only an existing Super Admin can assign a new
 Super Admin; ordinary users cannot request that role.
 
+Schedule is restricted to Schedule managers and Super Admins. Every schedule
+requires a date, active worker, Site, and work task. Times are optional, but two
+different Sites for the same worker on the same day are stored only as
+`pending_approval`; they cannot become a confirmed schedule until a Schedule
+manager resolves or approves the conflict. Pending rows are not copied into
+Entry.
+
 For direct Lark access-request notifications, enable the app's bot capability
 and the Lark permission that allows the app to send messages as the bot. The
 recipient must be in the app's available user scope. If that permission is not

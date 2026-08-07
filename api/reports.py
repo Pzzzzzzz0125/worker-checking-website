@@ -15,6 +15,7 @@ from report_handlers.payroll_check import handler as PayrollCheckHandler
 from report_handlers.payroll_worker_detail import handler as PayrollWorkerDetailHandler
 from report_handlers.sync import handler as SyncHandler
 from report_handlers.settings import handler as SettingsHandler
+from report_handlers.schedule import handler as ScheduleHandler
 from report_handlers.workbook import handler as WorkbookHandler
 from report_handlers.workers import handler as WorkersHandler, require_payroll_access
 
@@ -39,6 +40,7 @@ class handler(BaseHTTPRequestHandler):
             "import_access": DataAccessHandler,
             "export_access": DataAccessHandler,
             "settings_access": SettingsHandler,
+            "schedule": ScheduleHandler,
         }
         selected = actions.get(self.action())
         if selected is None:
@@ -73,6 +75,9 @@ class handler(BaseHTTPRequestHandler):
             return
         if self.action() == "settings_access":
             SettingsHandler.do_POST(self)
+            return
+        if self.action() == "schedule":
+            ScheduleHandler.do_POST(self)
             return
         if self.action() in {"day", "day_clear", "worker_days", "worker_days_copy"}:
             EntryHandler.do_POST(self)

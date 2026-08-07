@@ -1,5 +1,5 @@
 export type CostCenter = { id: string; name: string }
-export type Worker = { id: number; name: string; active?: number }
+export type Worker = { id: number; worker_key?: string; name: string; active?: number }
 export type WorkLocation = {
   id?: number
   name: string

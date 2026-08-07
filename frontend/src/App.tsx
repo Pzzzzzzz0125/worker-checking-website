@@ -12,13 +12,14 @@ const PayrollView=lazy(()=>import("@/views/checking").then(m=>({default:m.Payrol
 const LocationsView=lazy(()=>import("@/views/checking").then(m=>({default:m.LocationsView})))
 const DailyEntryView=lazy(()=>import("@/views/entry").then(m=>({default:m.DailyEntryView})))
 const WorkerEntryView=lazy(()=>import("@/views/entry").then(m=>({default:m.WorkerEntryView})))
+const ScheduleView=lazy(()=>import("@/views/schedule").then(m=>({default:m.ScheduleView})))
 const WorkersView=lazy(()=>import("@/views/workers").then(m=>({default:m.WorkersView})))
 const AiView=lazy(()=>import("@/views/data").then(m=>({default:m.AiView})))
 const ImportView=lazy(()=>import("@/views/transfers").then(m=>({default:m.ImportView})))
 const ExportView=lazy(()=>import("@/views/transfers").then(m=>({default:m.ExportView})))
 const SettingsView=lazy(()=>import("@/views/settings").then(m=>({default:m.SettingsView})))
 
-const hashView=():View=>{const raw=location.hash.slice(1);const value=(raw==="transfer"?"import":raw==="locations"?"sites":raw) as View;return ["overview","payroll","sites","ai","daily","worker","workers","import","export","settings"].includes(value)?value:"overview"}
+const hashView=():View=>{const raw=location.hash.slice(1);const value=(raw==="transfer"?"import":raw==="locations"?"sites":raw) as View;return ["overview","payroll","sites","ai","daily","worker","schedule","workers","import","export","settings"].includes(value)?value:"overview"}
 export default function App(){
  const [view,setViewState]=useState<View>(hashView());const [bootstrap,setBootstrap]=useState<Bootstrap|null>(null);const [bootError,setBootError]=useState<{message:string;setup:boolean}|null>(null);const [settingUp,setSettingUp]=useState(false);const [requests,setRequests]=useState(0)
  const load=async()=>{try{const base=await api<Bootstrap>("/api/bootstrap");let initial=base;try{const cached=JSON.parse(localStorage.getItem("speed-bootstrap-details")||"null");if(cached&&Array.isArray(cached.locations))initial={...base,...cached}}catch{}setBootstrap(initial);setBootError(null);triggerLarkSync(1_000);void api<Partial<Bootstrap>>("/api/bootstrap_details").then(details=>{try{localStorage.setItem("speed-bootstrap-details",JSON.stringify(details))}catch{}setBootstrap(current=>current?{...current,...details}:current)}).catch(()=>{})}catch(e){const message=e instanceof Error?e.message:"Could not connect to the database";setBootError({message,setup:e instanceof ApiError&&e.status===503});toast.error(message)}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
@@ -33,7 +34,7 @@ export default function App(){
    <datalist id="locations">{bootstrap.locations.map(x=><option value={x} key={x}/>)}</datalist>
    <datalist id="centers">{bootstrap.cost_centers.map(c=><option value={`${c.name} (${c.id})`} key={c.id}/>)}</datalist>
    <Suspense fallback={<div className="page space-y-3"><Skeleton className="h-12 w-72"/><Skeleton className="h-40"/><Skeleton className="h-64"/></div>}>
-    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>} {view==="settings"&&<SettingsView/>}
+    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="schedule"&&<ScheduleView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>} {view==="settings"&&<SettingsView/>}
    </Suspense>
  </AppShell>
 }

@@ -19,6 +19,7 @@ KEY_FIELDS = {
     "Cost Centers": "Cost Center ID",
     "Payroll Checks": "Payroll Check Key",
     "Audit Log": "Audit Key",
+    "Schedules": "Schedule Key",
 }
 
 _CACHE: dict[tuple[str, str, tuple[str, ...]], tuple[float, list[dict]]] = {}
@@ -214,7 +215,7 @@ class PostgresBase:
                         """,
                         [
                             (name,)
-                            for name in sorted(REQUIRED_TABLES | {WORK_LOG_TABLE})
+                            for name in sorted(REQUIRED_TABLES | {WORK_LOG_TABLE, "Schedules"})
                         ],
                     )
                     cursor.execute(
