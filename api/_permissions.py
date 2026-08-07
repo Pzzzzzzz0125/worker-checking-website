@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -309,7 +310,7 @@ def access_snapshot(current_session: dict) -> dict:
     }
 
 
-def submit_request(current_session: dict, requested_role: str, reason: str) -> None:
+def submit_request(current_session: dict, requested_role: str, reason: str) -> dict:
     ensure_permission_schema()
     current_user = register_user(current_session)
     if requested_role not in REQUESTABLE_ROLES:
@@ -333,11 +334,74 @@ def submit_request(current_session: dict, requested_role: str, reason: str) -> N
                     """,
                     (current_user["open_id"], requested_role, reason),
                 )
+        return _notify_super_admins(current_user, requested_role, reason)
     except Exception as error:
+        if isinstance(error, LarkAPIError):
+            raise
         raise LarkAPIError(
             f"Could not submit the access request: {type(error).__name__}.",
             status=503,
         ) from error
+
+
+def _app_link() -> str:
+    configured = os.environ.get("APP_URL", "").strip().rstrip("/")
+    if configured:
+        return f"{configured}/#settings"
+    production = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip().rstrip("/")
+    if production:
+        if not production.startswith("http"):
+            production = f"https://{production}"
+        return f"{production}/#settings"
+    return "https://workforce-app-theta.vercel.app/#settings"
+
+
+def _notify_super_admins(user: dict, requested_role: str, reason: str) -> dict:
+    """Best-effort Lark notification; the database request is authoritative."""
+    try:
+        from api._lark import LarkAPIError as LarkMessageError
+        from api._lark import lark_api, tenant_access_token
+
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT open_id FROM workforce_app_users WHERE role = 'super_admin'"
+                )
+                recipients = {str(row[0]) for row in cursor.fetchall() if row[0]}
+        recipients.update(admin_ids())
+        if not recipients:
+            return {"attempted": 0, "sent": 0, "failed": 0}
+        text = (
+            "Workforce access request\n"
+            f"User: {user.get('name') or user.get('open_id')}\n"
+            f"Requested role: {ROLE_LABELS[requested_role]}\n"
+            f"Reason: {reason or 'No reason supplied.'}\n"
+            f"Review: {_app_link()}"
+        )
+        token = tenant_access_token()
+        sent = 0
+        failed = 0
+        for recipient in recipients:
+            try:
+                lark_api(
+                    "POST",
+                    "/im/v1/messages",
+                    token=token,
+                    query={"receive_id_type": "open_id"},
+                    body={
+                        "receive_id": recipient,
+                        "msg_type": "text",
+                        "content": json.dumps({"text": text}, ensure_ascii=False),
+                    },
+                )
+                sent += 1
+            except LarkMessageError:
+                failed += 1
+        return {"attempted": len(recipients), "sent": sent, "failed": failed}
+    except Exception:
+        # Notification permissions, recipient availability, and network state
+        # must never turn a persisted access request into a failed request.
+        return {"attempted": 0, "sent": 0, "failed": 1}
 
 
 def review_request(

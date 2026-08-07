@@ -172,6 +172,12 @@ request Entry user or Schedule manager access. A Super Admin approves requests
 or assigns roles in the same page. Only an existing Super Admin can assign a new
 Super Admin; ordinary users cannot request that role.
 
+For direct Lark access-request notifications, enable the app's bot capability
+and the Lark permission that allows the app to send messages as the bot. The
+recipient must be in the app's available user scope. If that permission is not
+published or a recipient cannot receive bot messages, the request is still
+stored and visible in Settings.
+
 ### Protected pages
 
 | Variable | Required | Meaning |

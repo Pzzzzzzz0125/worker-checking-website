@@ -59,6 +59,7 @@ type AccessSettings = {
   latest_request: AccessRequest | null
   pending_requests: AccessRequest[]
   users: AccessUser[]
+  notification?: { attempted: number; sent: number; failed: number }
 }
 
 const roleDetails: Record<Role, string> = {
@@ -114,7 +115,10 @@ export function SettingsView() {
     try {
       const updated = await postJSON<AccessSettings>("/api/settings/access", body)
       setData(updated)
-      toast.success(success)
+      const notification = (updated as AccessSettings).notification
+      toast.success(notification && notification.attempted
+        ? `${success} Lark notifications sent: ${notification.sent}/${notification.attempted}.`
+        : success)
       window.dispatchEvent(new CustomEvent("speed-permissions-changed", { detail: updated }))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))

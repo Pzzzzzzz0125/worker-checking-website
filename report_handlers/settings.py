@@ -41,8 +41,9 @@ class handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("The request body must be an object.")
             action = str(body.get("action") or "")
+            notification = None
             if action == "request":
-                submit_request(
+                notification = submit_request(
                     session,
                     str(body.get("requested_role") or ""),
                     str(body.get("reason") or ""),
@@ -62,7 +63,10 @@ class handler(BaseHTTPRequestHandler):
                 )
             else:
                 raise ValueError("Choose a valid access-settings action.")
-            json_response(self, access_snapshot(session))
+            snapshot = access_snapshot(session)
+            if notification is not None:
+                snapshot["notification"] = notification
+            json_response(self, snapshot)
         except (ValueError, TypeError, json.JSONDecodeError) as error:
             json_response(self, {"error": str(error)}, 400)
         except PermissionError as error:

@@ -548,7 +548,9 @@ The Lark App Secret and access token never enter frontend JavaScript.
 Opening **Settings & access** automatically registers the signed-in Lark open
 ID; users never type an ID. New registered users start as `Viewer only` and can
 request `Entry user` or `Schedule manager`. The request appears in the Super
-Admin queue. Super Admin approval changes the role immediately.
+Admin queue, and the app attempts a Lark direct message to every Super Admin.
+Super Admin approval changes the role immediately. If the Lark Bot send scope
+is unavailable, the request remains safe in the in-app queue.
 
 The four hierarchical roles are:
 
