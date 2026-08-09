@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { Component, lazy, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from "react"
 import { LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 import { AppShell, type View } from "@/components/app-shell"
@@ -20,6 +20,24 @@ const ExportView=lazy(()=>import("@/views/transfers").then(m=>({default:m.Export
 const SettingsView=lazy(()=>import("@/views/settings").then(m=>({default:m.SettingsView})))
 
 const hashView=():View=>{const raw=location.hash.slice(1);const value=(raw==="transfer"?"import":raw==="locations"?"sites":raw) as View;return ["overview","payroll","sites","ai","daily","worker","schedule","workers","import","export","settings"].includes(value)?value:"overview"}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Workforce app runtime error", error, info.componentStack)
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return <div className="grid min-h-screen place-items-center bg-[#f5f7f7] p-5"><Card className="w-full max-w-xl"><CardHeader><CardTitle>Unable to open this page</CardTitle><CardDescription>The page encountered a browser error. Your saved database records are not affected.</CardDescription></CardHeader><CardContent className="space-y-4"><pre className="max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-red-200">{this.state.error.message}</pre><div className="flex flex-wrap gap-2"><Button onClick={() => window.location.reload()}>Reload page</Button><Button variant="secondary" onClick={() => { window.location.hash = "overview"; window.location.reload() }}>Return to overview</Button></div></CardContent></Card></div>
+  }
+}
+
 export default function App(){
  const [view,setViewState]=useState<View>(hashView());const [bootstrap,setBootstrap]=useState<Bootstrap|null>(null);const [bootError,setBootError]=useState<{message:string;setup:boolean}|null>(null);const [settingUp,setSettingUp]=useState(false);const [requests,setRequests]=useState(0)
  const load=async()=>{try{const base=await api<Bootstrap>("/api/bootstrap");let initial=base;try{const cached=JSON.parse(localStorage.getItem("speed-bootstrap-details")||"null");if(cached&&Array.isArray(cached.locations))initial={...base,...cached}}catch{}setBootstrap(initial);setBootError(null);triggerLarkSync(1_000);void api<Partial<Bootstrap>>("/api/bootstrap_details").then(details=>{try{localStorage.setItem("speed-bootstrap-details",JSON.stringify(details))}catch{}setBootstrap(current=>current?{...current,...details}:current)}).catch(()=>{})}catch(e){const message=e instanceof Error?e.message:"Could not connect to the database";setBootError({message,setup:e instanceof ApiError&&e.status===503});toast.error(message)}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
@@ -33,8 +51,8 @@ export default function App(){
    <datalist id="workers">{bootstrap.workers.map(w=><option value={w.name} key={w.id}/>)}</datalist>
    <datalist id="locations">{bootstrap.locations.map(x=><option value={x} key={x}/>)}</datalist>
    <datalist id="centers">{bootstrap.cost_centers.map(c=><option value={`${c.name} (${c.id})`} key={c.id}/>)}</datalist>
-   <Suspense fallback={<div className="page space-y-3"><Skeleton className="h-12 w-72"/><Skeleton className="h-40"/><Skeleton className="h-64"/></div>}>
+   <AppErrorBoundary><Suspense fallback={<div className="page space-y-3"><Skeleton className="h-12 w-72"/><Skeleton className="h-40"/><Skeleton className="h-64"/></div>}>
     {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="schedule"&&<ScheduleView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>} {view==="settings"&&<SettingsView/>}
-   </Suspense>
+   </Suspense></AppErrorBoundary>
  </AppShell>
 }
