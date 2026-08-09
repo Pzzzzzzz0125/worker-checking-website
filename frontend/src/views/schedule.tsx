@@ -30,6 +30,7 @@ type ScheduleRow = {
 type FormState = {
   schedule_key: string
   schedule_date: string
+  schedule_end_date: string
   worker_key: string
   site: string
   cost_code_ids: string[]
@@ -53,7 +54,12 @@ function shift(value: string, days: number) {
 }
 
 function emptyForm(date: string): FormState {
-  return { schedule_key: "", schedule_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "" }
+  return { schedule_key: "", schedule_date: date, schedule_end_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "" }
+}
+
+function scheduleDays(start: string, end: string) {
+  if (!start || !end || start > end) return 0
+  return Math.floor((new Date(`${end}T12:00:00`).getTime() - new Date(`${start}T12:00:00`).getTime()) / 86_400_000) + 1
 }
 
 function statusBadge(status: ScheduleRow["status"]) {
@@ -98,6 +104,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const edit = (row: ScheduleRow) => setForm({
     schedule_key: row.schedule_key,
     schedule_date: row.schedule_date,
+    schedule_end_date: row.schedule_date,
     worker_key: row.worker_key,
     site: row.site,
     cost_code_ids: row.cost_code_ids,
@@ -115,8 +122,14 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     }
     setSaving(true)
     try {
-      const result = await postJSON<{ schedule: ScheduleRow; submitted_for_approval: boolean }>("/api/schedule", { action: "save", ...form })
-      toast.success(result.submitted_for_approval ? "Conflict submitted for approval. It is not a confirmed schedule yet." : "Schedule confirmed.")
+      const days = scheduleDays(form.schedule_date, form.schedule_end_date)
+      if (!days || days > 31) {
+        toast.error("Choose a valid schedule range of 31 days or fewer.")
+        return
+      }
+      const result = await postJSON<{ schedule: ScheduleRow; schedules?: ScheduleRow[]; submitted_for_approval: boolean; conflicts?: { schedule_date: string; reason: string }[] }>("/api/schedule", { action: "save", ...form })
+      const savedCount = result.schedules?.length || 1
+      toast.success(result.submitted_for_approval ? `${savedCount} schedule${savedCount === 1 ? "" : "s"} saved; conflicts need approval.` : `${savedCount} schedule${savedCount === 1 ? "" : "s"} confirmed.`)
       resetForm()
       await load()
     } catch (error) {
@@ -174,8 +187,9 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     <Card className="mb-5">
       <CardHeader><CardTitle>{form.schedule_key ? "Edit schedule" : "Add schedule"}</CardTitle><CardDescription>Overlapping Site assignments for one worker cannot be confirmed directly. They are saved only as a pending approval request.</CardDescription></CardHeader>
       <CardContent><form className="grid gap-4" onSubmit={save}>
-        <div className="grid gap-4 md:grid-cols-3">
-          <label className="field-label">Date<Input type="date" value={form.schedule_date} onChange={event => setField("schedule_date", event.target.value)} required /></label>
+        <div className="grid gap-4 md:grid-cols-4">
+          <label className="field-label">Start date<Input type="date" value={form.schedule_date} onChange={event => setField("schedule_date", event.target.value)} required /></label>
+          <label className="field-label">End date<Input type="date" value={form.schedule_end_date} min={form.schedule_date} disabled={!!form.schedule_key} onChange={event => setField("schedule_end_date", event.target.value)} required /><span className="mt-1 block text-xs text-muted-foreground">{form.schedule_key ? "Editing one date" : `${scheduleDays(form.schedule_date, form.schedule_end_date) || 0} day${scheduleDays(form.schedule_date, form.schedule_end_date) === 1 ? "" : "s"} will be created`}</span></label>
           <label className="field-label">Worker<select className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm" value={form.worker_key} onChange={event => setField("worker_key", event.target.value)} required><option value="">Select worker…</option>{workers.map(worker => <option key={worker.worker_key || worker.id} value={worker.worker_key || String(worker.id)}>{worker.name}</option>)}</select></label>
           <label className="field-label">Site<Input list="locations" value={form.site} onChange={event => setField("site", event.target.value)} placeholder="Select or enter a Site" required /></label>
         </div>

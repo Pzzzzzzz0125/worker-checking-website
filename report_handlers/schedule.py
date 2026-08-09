@@ -205,40 +205,69 @@ def _save(base, body: dict, session: dict) -> dict:
     if not worker["active"]:
         raise ValueError("This worker is inactive and cannot be scheduled.")
     current_rows = [_row(item) for item in base.records(TABLE, cache_seconds=0)]
+    start_date = _date(body.get("schedule_date") or body.get("date"))
+    end_date = _date(body.get("schedule_end_date") or start_date)
+    if start_date > end_date:
+        raise ValueError("Schedule end date must be on or after the start date.")
+    if (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days > 30:
+        raise ValueError("Choose a schedule range of 31 days or fewer.")
+    if _clean(body.get("schedule_key"), 120) and start_date != end_date:
+        raise ValueError("Edit one schedule date at a time.")
     current = next(
         (item for item in current_rows if item["schedule_key"] == _clean(body.get("schedule_key"), 120)),
         None,
     )
-    fields = _payload(body, worker, _cost_codes(base), current)
-    candidate = _row({"record_id": current.get("record_id", "") if current else "", "fields": fields})
-    conflict = _conflict_reason(candidate, current_rows)
-    now = _iso_now()
-    status = "pending_approval" if conflict else "confirmed"
-    if current and current["status"] == "confirmed" and conflict:
-        status = "pending_approval"
-    fields.update(
-        {
-            "Status": status,
-            "Conflict Reason": conflict,
-            "Submitted By": _clean(session.get("sub"), 160),
-            "Submitted By Name": _clean(session.get("name"), 160),
-            "Reviewed By": "" if conflict else current.get("reviewed_by", "") if current else "",
-            "Reviewed By Name": "" if conflict else current.get("reviewed_by_name", "") if current else "",
-            "Reviewed At": "" if conflict else current.get("reviewed_at", "") if current else "",
-            "Created At": current.get("created_at", now) if current else now,
-            "Updated At": now,
-        }
-    )
-    saved = base.set_by_key(TABLE, KEY_FIELD, fields[KEY_FIELD], fields)
-    stored = next(
-        (_row(item) for item in base.records(TABLE, cache_seconds=0) if text_value(field(item, KEY_FIELD)) == fields[KEY_FIELD]),
-        {**candidate, **{key.lower().replace(" ", "_"): value for key, value in fields.items()}},
-    )
+    cost_codes = _cost_codes(base)
+    planned_rows = list(current_rows)
+    plans = []
+    cursor = date.fromisoformat(start_date)
+    last = date.fromisoformat(end_date)
+    while cursor <= last:
+        scheduled_date = cursor.isoformat()
+        day_body = {**body, "schedule_date": scheduled_date, "schedule_end_date": scheduled_date}
+        if not _clean(body.get("schedule_key"), 120):
+            day_body["schedule_key"] = ""
+        fields = _payload(day_body, worker, cost_codes, current if scheduled_date == start_date else None)
+        candidate = _row({"record_id": current.get("record_id", "") if current and scheduled_date == start_date else "", "fields": fields})
+        conflict = _conflict_reason(candidate, planned_rows)
+        now = _iso_now()
+        status = "pending_approval" if conflict else "confirmed"
+        if current and current["status"] == "confirmed" and conflict:
+            status = "pending_approval"
+        fields.update(
+            {
+                "Status": status,
+                "Conflict Reason": conflict,
+                "Submitted By": _clean(session.get("sub"), 160),
+                "Submitted By Name": _clean(session.get("name"), 160),
+                "Reviewed By": "" if conflict else current.get("reviewed_by", "") if current else "",
+                "Reviewed By Name": "" if conflict else current.get("reviewed_by_name", "") if current else "",
+                "Reviewed At": "" if conflict else current.get("reviewed_at", "") if current else "",
+                "Created At": current.get("created_at", now) if current and scheduled_date == start_date else now,
+                "Updated At": now,
+            }
+        )
+        planned_rows.append(_row({"record_id": candidate["record_id"], "fields": fields}))
+        plans.append((fields, candidate, conflict))
+        cursor += timedelta(days=1)
+
+    saved_results = [base.set_by_key(TABLE, KEY_FIELD, fields[KEY_FIELD], fields) for fields, _, _ in plans]
+    stored_rows = [
+        _row({"record_id": candidate.get("record_id", ""), "fields": fields})
+        for fields, candidate, _ in plans
+    ]
+    conflicts = [
+        {"schedule_date": row["schedule_date"], "reason": conflict}
+        for row, (_, _, conflict) in zip(stored_rows, plans)
+        if conflict
+    ]
     return {
-        "schedule": stored,
-        "submitted_for_approval": status == "pending_approval",
-        "conflict_reason": conflict,
-        "created": bool(saved.get("created", False)),
+        "schedule": stored_rows[0],
+        "schedules": stored_rows,
+        "submitted_for_approval": bool(conflicts),
+        "conflicts": conflicts,
+        "created": bool(saved_results[0].get("created", False)),
+        "created_count": sum(bool(result.get("created", False)) for result in saved_results),
     }
 
 

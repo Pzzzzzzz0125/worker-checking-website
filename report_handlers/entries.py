@@ -611,6 +611,16 @@ class handler(BaseHTTPRequestHandler):
                         raise ValueError("Choose at least one target date.")
                     if len(target_dates) > 366:
                         raise ValueError("Choose no more than 366 target dates at once.")
+                source_worker_id = str(int(body.get("source_worker_id") or source_rows[0].get("worker_id") or 0))
+                source_dates = {
+                    date.fromisoformat(str(row.get("date") or row.get("work_date") or "")).isoformat()
+                    for row in source_rows
+                }
+                if source_worker_id in targets and source_dates.intersection(target_dates):
+                    raise ValueError(
+                        "A Worker cannot be copied to the same Worker on the same date. "
+                        "Choose a different target date."
+                    )
                 rows = [
                     {
                         **source_rows[index % len(source_rows)],
