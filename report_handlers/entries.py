@@ -593,9 +593,33 @@ class handler(BaseHTTPRequestHandler):
                     raise ValueError("Choose days and at least one target worker.")
                 if any(target not in worker_map or not worker_map[target]["active"] for target in targets):
                     raise ValueError("Copy targets must be active workers.")
+                requested_dates = body.get("target_dates")
+                if requested_dates is None:
+                    target_dates = [
+                        date.fromisoformat(str(row.get("date") or row.get("work_date") or "")).isoformat()
+                        for row in source_rows
+                    ]
+                else:
+                    if not isinstance(requested_dates, list):
+                        raise ValueError("Target dates must be a list.")
+                    target_dates = []
+                    for value in requested_dates:
+                        target_date = date.fromisoformat(str(value)).isoformat()
+                        if target_date not in target_dates:
+                            target_dates.append(target_date)
+                    if not target_dates:
+                        raise ValueError("Choose at least one target date.")
+                    if len(target_dates) > 366:
+                        raise ValueError("Choose no more than 366 target dates at once.")
                 rows = [
-                    {**row, "forced_worker": target, "override_by": actor}
-                    for target in targets for row in source_rows
+                    {
+                        **source_rows[index % len(source_rows)],
+                        "date": target_date,
+                        "forced_worker": target,
+                        "override_by": actor,
+                    }
+                    for target in targets
+                    for index, target_date in enumerate(target_dates)
                 ]
                 result = save_rows(base, rows, worker_map)
                 json_response(
@@ -603,8 +627,9 @@ class handler(BaseHTTPRequestHandler):
                     {
                         "saved": True,
                         **result,
-                        "days": len(source_rows),
+                        "days": len(target_dates),
                         "target_workers": [worker_map[target]["name"] for target in targets],
+                        "target_dates": target_dates,
                     },
                 )
                 return
