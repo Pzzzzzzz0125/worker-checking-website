@@ -8,7 +8,7 @@
     },
     "api/reports.py": {
       "maxDuration": 300,
-      "includeFiles": "templates/*.xlsx"
+      "includeFiles": "{templates/*.xlsx,data/site-address-library.csv}"
     }
   },
   "rewrites": [
@@ -51,6 +51,26 @@
     {
       "source": "/api/schedule",
       "destination": "/api/reports?action=schedule"
+    },
+    {
+      "source": "/api/sites/library",
+      "destination": "/api/reports?action=sites_library"
+    },
+    {
+      "source": "/api/sites/delete",
+      "destination": "/api/reports?action=site_delete"
+    },
+    {
+      "source": "/api/sites/restore",
+      "destination": "/api/reports?action=site_restore"
+    },
+    {
+      "source": "/api/sites/import",
+      "destination": "/api/reports?action=sites_import"
+    },
+    {
+      "source": "/api/sites/extract",
+      "destination": "/api/reports?action=sites_extract"
     },
     {
       "source": "/api/payroll/access",

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { api, type LarkSyncStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-export type View = "overview" | "payroll" | "sites" | "ai" | "daily" | "worker" | "schedule" | "workers" | "import" | "export" | "settings"
+export type View = "overview" | "payroll" | "sites" | "ai" | "daily" | "worker" | "schedule" | "workers" | "site-management" | "import" | "export" | "settings"
 const groups: { label: string; items: { id: View; label: string; icon: typeof LayoutDashboard }[] }[] = [
   { label: "Check", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard }, { id: "payroll", label: "Payroll check", icon: ClipboardCheck }, { id: "sites", label: "Sites", icon: MapPin },
@@ -16,7 +16,7 @@ const groups: { label: string; items: { id: View; label: string; icon: typeof La
     { id: "schedule", label: "Schedule", icon: CalendarClock },
   ]},
   { label: "Data", items: [
-    { id: "workers", label: "Workers", icon: Users }, { id: "import", label: "Import", icon: Upload }, { id: "export", label: "Export", icon: Download },
+    { id: "workers", label: "Workers", icon: Users }, { id: "site-management", label: "Site management", icon: MapPin }, { id: "import", label: "Import", icon: Upload }, { id: "export", label: "Export", icon: Download },
   ]},
   { label: "Account", items: [
     { id: "settings", label: "Settings & access", icon: Settings },

@@ -48,6 +48,8 @@ export function ImportView() {
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [extractingSites, setExtractingSites] = useState(false)
+  const [siteExtraction, setSiteExtraction] = useState<any>(null)
 
   useEffect(() => {
     void api<Access>("/api/import/access")
@@ -97,6 +99,15 @@ export function ImportView() {
         })
         results[value.table] = value.result
       }
+      try {
+        const extracted: any = await postJSON("/api/sites/extract", {})
+        setSiteExtraction(extracted)
+        results["Site review queue"] = extracted
+      } catch (error) {
+        toast.warning(
+          `Work records were imported, but Site extraction needs to be retried: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
       setResult({ results })
       toast.success("Verified workforce data imported.")
     } catch (error) {
@@ -106,6 +117,23 @@ export function ImportView() {
       )
     } finally {
       setImporting(false)
+    }
+  }
+
+  const extractSites = async () => {
+    setExtractingSites(true)
+    try {
+      const value: any = await postJSON("/api/sites/extract", {})
+      setSiteExtraction(value)
+      toast.success(
+        value.created
+          ? `${value.created} historical Site names were added to Site Management for review.`
+          : "No new historical Site names need review.",
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExtractingSites(false)
     }
   }
 
@@ -170,6 +198,21 @@ export function ImportView() {
           <div className="flex items-center gap-2"><Check className="size-5 text-emerald-700" /><strong>Import complete</strong></div>
           <p className="mt-2 text-sm">Existing records were preserved. The same import can be safely resumed if a stage was interrupted.</p>
         </div>}
+      </CardContent>
+    </Card>
+    <Card className="mt-5">
+      <CardHeader>
+        <CardTitle>Extract Sites from existing work records</CardTitle>
+        <CardDescription>Find Site names that are not covered by the formal address library. New findings are added as archived, unverified records so an administrator can formalize them in Site Management before use.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" onClick={() => void extractSites()} disabled={extractingSites}>
+          {extractingSites ? <LoaderCircle className="size-4 animate-spin" /> : <MapPin className="size-4" />}
+          {extractingSites ? "Scanning work records…" : "Extract Sites for review"}
+        </Button>
+        {siteExtraction && <span className="text-sm text-muted-foreground">
+          {Number(siteExtraction.history_locations || 0).toLocaleString()} historical names scanned · {Number(siteExtraction.created || 0).toLocaleString()} added
+        </span>}
       </CardContent>
     </Card>
   </div>

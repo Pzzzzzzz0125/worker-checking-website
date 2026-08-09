@@ -80,7 +80,7 @@ class FakeBase:
 class LarkBaseReadTests(unittest.TestCase):
     def test_bootstrap_reads_reference_data(self):
         result = build_bootstrap(FakeBase())
-        self.assertEqual(result["workers"], [{"id": 7, "name": "Ana Diaz", "active": 1}])
+        self.assertEqual(result["workers"], [{"id": 7, "worker_key": "7", "name": "Ana Diaz", "active": 1}])
         self.assertEqual(result["cost_centers"], [{"id": "CC-12", "name": "Framing"}])
         self.assertEqual(result["locations"], [])
         details = build_bootstrap_details(FakeBase())

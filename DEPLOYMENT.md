@@ -2,7 +2,7 @@
 
 Production deployment, integration, recovery, and maintainer handoff for the
 Speed Construction Workforce App.
-Last reviewed against the code: **July 28, 2026**
+Last reviewed against the code: **August 8, 2026**
 
 This document is written for the person who inherits the application. It
 assumes that person may not know Vercel, PostgreSQL, Lark, or this codebase yet.
@@ -178,6 +178,19 @@ different Sites for the same worker on the same day are stored only as
 `pending_approval`; they cannot become a confirmed schedule until a Schedule
 manager resolves or approves the conflict. Pending rows are not copied into
 Entry.
+
+Site Management uses the same protected access as Worker Management. The first
+request after this release creates the PostgreSQL `Sites` collection and seeds
+the 68 unique verified addresses in `data/site-address-library.csv`. New Entry,
+Schedule, and invoice Site suggestions come from active Site records rather
+than scanning thousands of historical Location Entry rows.
+
+After deploying a release that adds or changes Site fields, run the Lark Base
+setup endpoint once as a configured Lark administrator so the one-way mirror
+has the matching `Sites` table. This does not replace PostgreSQL as the source
+of truth. In Site Management, future XLSX/CSV libraries can be merged or used
+to replace the active library. Import -> **Extract Sites for review** finds
+legacy Entry names and creates archived/unverified records for manual cleanup.
 
 For direct Lark access-request notifications, enable the app's bot capability
 and the Lark permission that allows the app to send messages as the bot. The

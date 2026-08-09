@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
-data/
+data/*
+!data/site-address-library.csv
 *.xlsx
 *.xlsm
 !templates/

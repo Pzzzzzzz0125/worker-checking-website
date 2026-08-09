@@ -1,7 +1,7 @@
 # Speed Construction Workforce App
 
 Maintainer handoff and implementation reference
-Last reviewed against the code: **July 28, 2026**
+Last reviewed against the code: **August 8, 2026**
 
 This repository contains the production workforce recording and payroll-review
 website developed for Speed Construction. The application records daily work,
@@ -125,6 +125,7 @@ configuration.
 ├── report_handlers/
 │   ├── entries.py               daily/monthly entry read, save, clear, copy
 │   ├── workers.py               worker CRUD and protected access
+│   ├── sites.py                 formal Site address library, import, archive
 │   ├── payroll.py               half-month payroll calculation
 │   ├── payroll_worker_detail.py expanded worker payroll history
 │   ├── location_detail.py       location/cost-center/cost analysis
@@ -137,10 +138,11 @@ configuration.
 │   └── data_access.py           Import/Export authorization
 ├── frontend/
 │   ├── src/components/          shell, shared entry editor, UI primitives
-│   ├── src/views/               checking, entries, data, transfers, workers
+│   ├── src/views/               checking, entries, data, transfers, workers, Sites
 │   ├── src/lib/                 API client, types, utility functions
 │   └── vite.config.ts           build and local API proxy
 ├── templates/                   approved auditor and invoice XLSX templates
+├── data/site-address-library.csv initial verified Site address seed
 ├── worklog_parser.py            normalized legacy cell parser
 ├── xlsx_workbook.py             dependency-free XLSX reader/updater
 ├── gemini_parser.py             server-side Gemini structured extraction

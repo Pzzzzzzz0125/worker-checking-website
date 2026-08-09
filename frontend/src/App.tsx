@@ -14,12 +14,13 @@ const DailyEntryView=lazy(()=>import("@/views/entry").then(m=>({default:m.DailyE
 const WorkerEntryView=lazy(()=>import("@/views/entry").then(m=>({default:m.WorkerEntryView})))
 const ScheduleView=lazy(()=>import("@/views/schedule").then(m=>({default:m.ScheduleView})))
 const WorkersView=lazy(()=>import("@/views/workers").then(m=>({default:m.WorkersView})))
+const SiteManagementView=lazy(()=>import("@/views/site-management").then(m=>({default:m.SiteManagementView})))
 const AiView=lazy(()=>import("@/views/data").then(m=>({default:m.AiView})))
 const ImportView=lazy(()=>import("@/views/transfers").then(m=>({default:m.ImportView})))
 const ExportView=lazy(()=>import("@/views/transfers").then(m=>({default:m.ExportView})))
 const SettingsView=lazy(()=>import("@/views/settings").then(m=>({default:m.SettingsView})))
 
-const hashView=():View=>{const raw=location.hash.slice(1);const value=(raw==="transfer"?"import":raw==="locations"?"sites":raw) as View;return ["overview","payroll","sites","ai","daily","worker","schedule","workers","import","export","settings"].includes(value)?value:"overview"}
+const hashView=():View=>{const raw=location.hash.slice(1);const value=(raw==="transfer"?"import":raw==="locations"?"sites":raw) as View;return ["overview","payroll","sites","ai","daily","worker","schedule","workers","site-management","import","export","settings"].includes(value)?value:"overview"}
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -40,7 +41,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 export default function App(){
  const [view,setViewState]=useState<View>(hashView());const [bootstrap,setBootstrap]=useState<Bootstrap|null>(null);const [bootError,setBootError]=useState<{message:string;setup:boolean}|null>(null);const [settingUp,setSettingUp]=useState(false);const [requests,setRequests]=useState(0)
- const load=async()=>{try{const base=await api<Bootstrap>("/api/bootstrap");let initial=base;try{const cached=JSON.parse(localStorage.getItem("speed-bootstrap-details")||"null");if(cached&&Array.isArray(cached.locations))initial={...base,...cached}}catch{}setBootstrap(initial);setBootError(null);triggerLarkSync(1_000);void api<Partial<Bootstrap>>("/api/bootstrap_details").then(details=>{try{localStorage.setItem("speed-bootstrap-details",JSON.stringify(details))}catch{}setBootstrap(current=>current?{...current,...details}:current)}).catch(()=>{})}catch(e){const message=e instanceof Error?e.message:"Could not connect to the database";setBootError({message,setup:e instanceof ApiError&&e.status===503});toast.error(message)}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
+ const load=async()=>{try{const base=await api<Bootstrap>("/api/bootstrap");let initial=base;try{const cached=JSON.parse(localStorage.getItem("speed-bootstrap-details-v2")||"null");if(cached&&Array.isArray(cached.locations))initial={...base,...cached}}catch{}setBootstrap(initial);setBootError(null);triggerLarkSync(1_000);void api<Partial<Bootstrap>>("/api/bootstrap_details").then(details=>{try{localStorage.setItem("speed-bootstrap-details-v2",JSON.stringify(details))}catch{}setBootstrap(current=>current?{...current,...details}:current);triggerLarkSync(1_000)}).catch(()=>{})}catch(e){const message=e instanceof Error?e.message:"Could not connect to the database";setBootError({message,setup:e instanceof ApiError&&e.status===503});toast.error(message)}};useEffect(()=>{void load();const listener=()=>setViewState(hashView());addEventListener("hashchange",listener);return()=>removeEventListener("hashchange",listener)},[])
  useEffect(()=>{const update=(event:Event)=>setRequests(Number((event as CustomEvent<number>).detail||0));addEventListener("speed-api-loading",update);return()=>removeEventListener("speed-api-loading",update)},[])
  const initialize=async()=>{setSettingUp(true);try{const result=await postJSON<{schema:{ready:boolean}}>("/api/lark/setup",{});if(!result.schema.ready)throw new Error("Lark Base was created but its schema is incomplete.");setBootError({message:"Lark Base tables are ready. The workforce data adapter is the next deployment step.",setup:true});toast.success("Lark Base tables created successfully")}catch(e){toast.error(e instanceof Error?e.message:"Could not initialize Lark Base")}finally{setSettingUp(false)}}
  const setView=(v:View)=>{location.hash=v;setViewState(v)}
@@ -52,7 +53,7 @@ export default function App(){
    <datalist id="locations">{bootstrap.locations.map(x=><option value={x} key={x}/>)}</datalist>
    <datalist id="centers">{bootstrap.cost_centers.map(c=><option value={`${c.name} (${c.id})`} key={c.id}/>)}</datalist>
    <AppErrorBoundary><Suspense fallback={<div className="page space-y-3"><Skeleton className="h-12 w-72"/><Skeleton className="h-40"/><Skeleton className="h-64"/></div>}>
-    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="schedule"&&<ScheduleView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>} {view==="settings"&&<SettingsView/>}
+    {view==="overview"&&<OverviewView bootstrap={bootstrap}/>} {view==="payroll"&&<PayrollView bootstrap={bootstrap}/>} {view==="sites"&&<LocationsView bootstrap={bootstrap}/>} {view==="ai"&&<AiView bootstrap={bootstrap} onSaved={load}/>} {view==="daily"&&<DailyEntryView bootstrap={bootstrap}/>} {view==="worker"&&<WorkerEntryView bootstrap={bootstrap}/>} {view==="schedule"&&<ScheduleView bootstrap={bootstrap}/>} {view==="workers"&&<WorkersView onSaved={load}/>} {view==="site-management"&&<SiteManagementView onSaved={load}/>} {view==="import"&&<ImportView/>} {view==="export"&&<ExportView bootstrap={bootstrap}/>} {view==="settings"&&<SettingsView/>}
    </Suspense></AppErrorBoundary>
  </AppShell>
 }
