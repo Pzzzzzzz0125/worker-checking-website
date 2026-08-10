@@ -152,6 +152,13 @@ def _leading_number(value: str) -> str:
     return match.group(1) if match else ""
 
 
+def _legacy_fallback(value: str) -> str:
+    """Collapse a trailing legacy '=' marker without discarding the Site."""
+    raw = _clean(value)
+    cleaned = _clean(re.sub(r"\s*=+\s*$", "", raw))
+    return cleaned or raw
+
+
 _STREET_WORDS = {
     "ave", "avenue", "blvd", "boulevard", "cir", "circle", "ct", "court",
     "dr", "drive", "e", "east", "hwy", "highway", "ln", "lane", "n",
@@ -195,7 +202,7 @@ class SiteResolver:
         possible = possible or []
         return {
             "raw_name": raw,
-            "name": site.get("name") if site else raw,
+            "name": site.get("name") if site else _legacy_fallback(raw),
             "site_key": site.get("site_key") if site else "",
             "matched": bool(site),
             "method": method,
@@ -656,11 +663,25 @@ class handler(BaseHTTPRequestHandler):
             covered_history_records = 0
             for site in sites:
                 resolution = resolver.resolve(site["name"])
+                fallback_owner = any(
+                    other["site_key"] != site["site_key"]
+                    and _clean(other["name"]).casefold() == _clean(resolution["name"]).casefold()
+                    for other in sites
+                )
                 covered = (
                     site["source"] == "work-entry extraction"
                     and not site["verified"]
-                    and resolution["matched"]
-                    and resolution["site_key"] != site["site_key"]
+                    and (
+                        (
+                            resolution["matched"]
+                            and resolution["site_key"] != site["site_key"]
+                        )
+                        or (
+                            fallback_owner
+                            and _clean(site["name"]).casefold()
+                            != _clean(resolution["name"]).casefold()
+                        )
+                    )
                 )
                 if covered:
                     covered_history_records += 1

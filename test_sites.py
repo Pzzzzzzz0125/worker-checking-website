@@ -65,7 +65,7 @@ class SiteLibraryTests(unittest.TestCase):
         ])
         unresolved = resolver.resolve("444 =")
         self.assertFalse(unresolved["matched"])
-        self.assertEqual(unresolved["name"], "444 =")
+        self.assertEqual(unresolved["name"], "444")
         self.assertEqual(unresolved["method"], "ambiguous")
         self.assertEqual(len(unresolved["possible_matches"]), 2)
 
@@ -78,6 +78,11 @@ class SiteLibraryTests(unittest.TestCase):
         }])
         self.assertFalse(resolver.resolve("2 Campo Bello Ln")["matched"])
         self.assertTrue(resolver.resolve("2")["matched"])
+
+    def test_trailing_equals_merges_with_old_fallback_label(self):
+        resolver = SiteResolver([])
+        self.assertEqual(resolver.resolve("1260 =")["name"], "1260")
+        self.assertEqual(resolver.resolve("850 Villa =")["name"], "850 Villa")
 
     def test_supplied_workbook_parses_and_deduplicates(self):
         path = Path("/Users/jianfuzhao/Desktop/Address(1).xlsx")
