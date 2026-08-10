@@ -9,9 +9,53 @@ from report_handlers.location_detail import (
     handler as LocationDetailHandler,
 )
 from report_handlers.payroll_worker_detail import aggregate_with_estimated_cost
+from report_handlers.sites import SiteResolver
 
 
 class ReportTests(unittest.TestCase):
+    def test_report_data_merges_legacy_site_labels_into_formal_address(self):
+        class FakeBase:
+            def records(self, table_name, **kwargs):
+                del kwargs
+                if table_name == "Workers":
+                    return [{"fields": {
+                        "Worker Key": "1", "Name": "Worker A", "Active": True,
+                    }}]
+                if table_name == "Work Days":
+                    return [{"fields": {
+                        "Work Day Key": "1|2026-07-01", "Worker Key": "1",
+                        "Work Date": "2026-07-01", "Status": "worked", "Total Hours": 8,
+                    }}]
+                if table_name == "Location Entries":
+                    return [
+                        {"fields": {
+                            "Location Entry Key": "a", "Work Day Key": "1|2026-07-01",
+                            "Location": "1073 Crosswind =", "Location Hours": 4,
+                        }},
+                        {"fields": {
+                            "Location Entry Key": "b", "Work Day Key": "1|2026-07-01",
+                            "Location": "1073", "Location Hours": 4,
+                        }},
+                    ]
+                return []
+
+        resolver = SiteResolver([{
+            "site_key": "crosswind", "name": "1073 Crosswind Ct, San Jose, CA 95120",
+            "full_address": "1073 Crosswind Ct, San Jose, CA 95120",
+            "address_line_1": "1073 Crosswind Ct", "aliases": "", "active": True,
+            "verified": True,
+        }])
+        with patch("api._reports.load_site_resolver", return_value=resolver):
+            result = load_report_data(
+                FakeBase(), date(2026, 7, 1), date(2026, 7, 1),
+            )
+        names = [item["name"] for item in result["days"][0]["locations"]]
+        self.assertEqual(names, [
+            "1073 Crosswind Ct, San Jose, CA 95120",
+            "1073 Crosswind Ct, San Jose, CA 95120",
+        ])
+        self.assertEqual(result["days"][0]["locations"][0]["raw_name"], "1073 Crosswind =")
+
     def test_archived_workers_are_excluded_from_report_data(self):
         class FakeBase:
             def records(self, table_name, **kwargs):

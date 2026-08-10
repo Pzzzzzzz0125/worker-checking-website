@@ -203,7 +203,8 @@ export function LocationsView({ bootstrap }: { bootstrap: Bootstrap }) {
   const load=async()=>{
     if(!access?.authorized)return
     if(!from||!to||from>to)return toast.error("Choose a valid From and To date range.")
-    const found=bootstrap.locations.find(x=>x.toLowerCase()===location.toLowerCase())||bootstrap.locations.find(x=>x.toLowerCase().includes(location.toLowerCase()))
+    const reportLocations=bootstrap.report_locations||bootstrap.locations
+    const found=reportLocations.find(x=>x.toLowerCase()===location.toLowerCase())||reportLocations.find(x=>x.toLowerCase().includes(location.toLowerCase()))
     if(!found)return toast.error("Choose a site from the suggestions.")
     setLoading(true)
     try{
@@ -228,7 +229,7 @@ export function LocationsView({ bootstrap }: { bootstrap: Bootstrap }) {
   return <div className="page">
     <PageIntro title="Site check" text="See site hours, workers, cost codes, and estimated labor cost."/>
     <Card className="mb-5"><CardContent className="grid gap-3 !pt-5 md:grid-cols-[1.5fr_1fr_1fr_auto]">
-      <label className="field-label">Site<Input list="locations" value={location} onChange={e=>setLocation(e.target.value)} placeholder="Search address or site"/></label>
+      <label className="field-label">Site<Input list="report-locations" value={location} onChange={e=>setLocation(e.target.value)} placeholder="Search formal or historical site"/></label>
       <label className="field-label">From<Input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label>
       <label className="field-label">To<Input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label>
       <Button className="self-end" disabled={loading} onClick={()=>void load()}>{loading?<LoaderCircle className="size-4 animate-spin"/>:<Search className="size-4"/>}{loading?"Calculating…":"Check site"}</Button>

@@ -114,7 +114,6 @@ class handler(BaseHTTPRequestHandler):
             data = load_report_data(
                 DataStore(), query_start, query_end,
                 worker_key=worker_id,
-                location=requested,
             )
             names = sorted(
                 {location["name"] for day in data["days"] for location in day["locations"] if location["name"]},
@@ -176,7 +175,31 @@ class handler(BaseHTTPRequestHandler):
                 workers.append(item)
             workers.sort(key=lambda item: (-item["hours"], item["worker_name"].casefold()))
             dates = sorted(all_dates)
-            selected_days = [day for day in data["days"] if start <= day["date"] <= end]
+            selected_days = []
+            for day in data["days"]:
+                if not start <= day["date"] <= end:
+                    continue
+                selected_locations = [
+                    item for item in day["locations"]
+                    if item["name"].casefold() == matched.casefold()
+                ]
+                if not selected_locations:
+                    continue
+                centers: dict[str, dict] = {}
+                for entry in selected_locations:
+                    entry_centers = entry.get("cost_centers") or []
+                    for center in entry_centers:
+                        center_id = str(center.get("id") or "")
+                        current = centers.setdefault(
+                            center_id,
+                            {"id": center_id, "name": center.get("name") or "", "hours": 0.0},
+                        )
+                        current["hours"] += float(entry.get("hours") or 0) / max(len(entry_centers), 1)
+                selected_days.append({
+                    **day,
+                    "locations": selected_locations,
+                    "cost_centers": list(centers.values()),
+                })
             json_response(self, {"location": matched, "range": {"from": start, "to": end}, "totals": {"workers": len(workers), "hours": round(sum(item["hours"] for item in workers), 2), "regular_hours": round(sum(item["regular_hours"] for item in workers), 2), "weighted_hours": round(sum(item["weighted_hours"] for item in workers), 2), "estimated_cost": round(sum(item["estimated_cost"] for item in workers), 2), "days": len(dates), "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None}, "workers": workers, "cost_centers": aggregate(selected_days, "cost_centers")})
         except (ValueError, LarkAPIError) as error:
             status = error.status if isinstance(error, LarkAPIError) else 400

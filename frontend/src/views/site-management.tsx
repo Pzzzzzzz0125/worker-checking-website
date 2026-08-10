@@ -27,7 +27,19 @@ type SiteProfile = {
 
 type SiteResponse = {
   sites: SiteProfile[]
+  historical_reviews: HistoricalSiteReview[]
+  covered_history_records: number
   totals: { sites: number; active: number; archived: number; verified: number; needs_review: number }
+}
+
+type HistoricalSiteReview = {
+  raw_name: string
+  suggested_name: string
+  first_number: string
+  occurrences: number
+  has_equals: boolean
+  reason: "ambiguous" | "unmatched"
+  possible_matches: string[]
 }
 
 type Access = {
@@ -106,6 +118,31 @@ export function SiteManagementView({ onSaved }: { onSaved: () => void }) {
         .some(value => value.toLocaleLowerCase().includes(query))
     })
   }, [data, search, status])
+
+  const historicalReviews = useMemo(() => {
+    if (status !== "review") return []
+    const query = search.trim().toLocaleLowerCase()
+    return (data?.historical_reviews || []).filter(item =>
+      !query || [item.raw_name, item.suggested_name, ...item.possible_matches]
+        .some(value => value.toLocaleLowerCase().includes(query)),
+    )
+  }, [data, search, status])
+
+  const formalizeHistorical = (item: HistoricalSiteReview) => {
+    const candidate = item.suggested_name.trim()
+    setDraft({
+      ...blankSite(),
+      name: candidate,
+      full_address: candidate,
+      address_line_1: candidate,
+      aliases: item.raw_name,
+      verified: false,
+      source: "historical review",
+      notes: item.has_equals
+        ? `Historical value contained '=' and appeared ${item.occurrences} time(s). Confirm its formal address; saved hours will be merged automatically.`
+        : `Historical Site appeared ${item.occurrences} time(s). Confirm its formal address; saved hours will be merged automatically.`,
+    })
+  }
 
   const refreshEverywhere = async () => {
     try { localStorage.removeItem("speed-bootstrap-details-v2") } catch {}
@@ -211,8 +248,8 @@ export function SiteManagementView({ onSaved }: { onSaved: () => void }) {
       </CardContent>
     </Card>
     <Card>
-      <CardHeader className="!flex-col justify-between gap-3 lg:!flex-row lg:items-center"><div><CardTitle>Site address book</CardTitle><CardDescription>Archived Sites remain attached to historical work records but cannot be selected for new work.</CardDescription></div><div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto"><div className="relative min-w-64 flex-1"><Search className="absolute left-3 top-3.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address, city, ZIP, alias…" /></div><select className="h-11 rounded-lg border bg-white px-3 text-sm" value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="active">Active Sites</option><option value="archived">Archived Sites</option><option value="review">Needs review</option></select><Button onClick={() => setDraft(blankSite())}><Plus className="size-4" />Add Site</Button></div></CardHeader>
-      <CardContent className="overflow-x-auto p-0"><table className="data-table min-w-[860px]"><thead><tr><th>Site</th><th>City</th><th>State / ZIP</th><th>Source</th><th>Status</th><th className="w-24">Action</th></tr></thead><tbody>{sites.map(site => <tr key={site.site_key}><td><strong>{site.name}</strong>{site.aliases && <div className="mt-1 text-xs text-muted-foreground">Aliases: {site.aliases}</div>}</td><td>{site.city || "—"}</td><td>{[site.state, site.zip_code].filter(Boolean).join(" ") || "—"}</td><td className="text-xs text-muted-foreground">{site.source || "app"}</td><td><div className="flex flex-wrap gap-1"><Badge variant={site.active ? "success" : "secondary"}>{site.active ? "Active" : "Archived"}</Badge>{!site.verified && <Badge variant="warning">Needs review</Badge>}</div></td><td><Button variant="ghost" size="sm" onClick={() => setDraft({ ...site })}><Pencil className="size-4" />Edit</Button></td></tr>)}{!sites.length && <tr><td colSpan={6} className="py-16 text-center text-sm text-muted-foreground">No Sites match this filter.</td></tr>}</tbody></table></CardContent>
+      <CardHeader className="!flex-col justify-between gap-3 lg:!flex-row lg:items-center"><div><CardTitle>Site address book</CardTitle><CardDescription>Archived Sites remain attached to historical work records but cannot be selected for new work.{Boolean(data?.covered_history_records) && ` ${data?.covered_history_records} legacy labels are already merged into formal Sites.`}</CardDescription></div><div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto"><div className="relative min-w-64 flex-1"><Search className="absolute left-3 top-3.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address, city, ZIP, alias…" /></div><select className="h-11 rounded-lg border bg-white px-3 text-sm" value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="active">Active Sites</option><option value="archived">Archived Sites</option><option value="review">Needs review</option></select><Button onClick={() => setDraft(blankSite())}><Plus className="size-4" />Add Site</Button></div></CardHeader>
+      <CardContent className="overflow-x-auto p-0"><table className="data-table min-w-[860px]"><thead><tr><th>Site</th><th>City</th><th>State / ZIP</th><th>Source</th><th>Status</th><th className="w-28">Action</th></tr></thead><tbody>{historicalReviews.map(item => <tr key={`history-${item.raw_name}`} className="bg-amber-50/50"><td><strong>{item.raw_name}</strong>{item.possible_matches.length > 0 && <div className="mt-1 text-xs text-amber-800">Possible: {item.possible_matches.join(" · ")}</div>}</td><td>—</td><td>—</td><td className="text-xs text-muted-foreground">{item.occurrences} historical {item.occurrences === 1 ? "entry" : "entries"}</td><td><div className="flex flex-wrap gap-1"><Badge variant="warning">Needs formal address</Badge>{item.has_equals && <Badge variant="secondary">Contains =</Badge>}{item.reason === "ambiguous" && <Badge variant="secondary">Ambiguous</Badge>}</div></td><td><Button variant="outline" size="sm" onClick={() => formalizeHistorical(item)}><Pencil className="size-4" />Formalize</Button></td></tr>)}{sites.map(site => <tr key={site.site_key}><td><strong>{site.name}</strong>{site.aliases && <div className="mt-1 text-xs text-muted-foreground">Aliases: {site.aliases}</div>}</td><td>{site.city || "—"}</td><td>{[site.state, site.zip_code].filter(Boolean).join(" ") || "—"}</td><td className="text-xs text-muted-foreground">{site.source || "app"}</td><td><div className="flex flex-wrap gap-1"><Badge variant={site.active ? "success" : "secondary"}>{site.active ? "Active" : "Archived"}</Badge>{!site.verified && <Badge variant="warning">Needs review</Badge>}</div></td><td><Button variant="ghost" size="sm" onClick={() => setDraft({ ...site })}><Pencil className="size-4" />Edit</Button></td></tr>)}{!sites.length && !historicalReviews.length && <tr><td colSpan={6} className="py-16 text-center text-sm text-muted-foreground">No Sites match this filter.</td></tr>}</tbody></table></CardContent>
     </Card>
     <Dialog open={Boolean(draft)} onOpenChange={open => !open && setDraft(null)}>{draft && <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{draft.site_key ? "Edit Site" : "Add Site"}</DialogTitle><DialogDescription>Use a complete postal address where available. Aliases help match older short Site names during future imports.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><label className="field-label sm:col-span-2">Site display name<Input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} placeholder="e.g. 444 Pocatello Dr, San Jose, CA 95111" /></label><label className="field-label sm:col-span-2">Full address<Input value={draft.full_address} onChange={event => setDraft({ ...draft, full_address: event.target.value, name: draft.name || event.target.value })} /></label><label className="field-label sm:col-span-2">Address line 1<Input value={draft.address_line_1} onChange={event => setDraft({ ...draft, address_line_1: event.target.value })} /></label><label className="field-label">City<Input value={draft.city} onChange={event => setDraft({ ...draft, city: event.target.value })} /></label><div className="grid grid-cols-2 gap-3"><label className="field-label">State<Input maxLength={2} value={draft.state} onChange={event => setDraft({ ...draft, state: event.target.value.toUpperCase() })} /></label><label className="field-label">ZIP Code<Input value={draft.zip_code} onChange={event => setDraft({ ...draft, zip_code: event.target.value })} /></label></div><label className="field-label sm:col-span-2">Aliases<Input value={draft.aliases} onChange={event => setDraft({ ...draft, aliases: event.target.value })} placeholder="Separate old or short Site names with semicolons" /></label><label className="field-label sm:col-span-2">Default Cost Code IDs<Input value={draft.default_cost_code_ids} onChange={event => setDraft({ ...draft, default_cost_code_ids: event.target.value })} placeholder="Optional; separate IDs with semicolons" /></label><label className="field-label sm:col-span-2">Notes<Textarea value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} /></label><label className="flex items-center gap-2 rounded-xl border p-4 text-sm font-semibold"><input type="checkbox" checked={draft.active} onChange={event => setDraft({ ...draft, active: event.target.checked })} />Active Site</label><label className="flex items-center gap-2 rounded-xl border p-4 text-sm font-semibold"><input type="checkbox" checked={draft.verified} onChange={event => setDraft({ ...draft, verified: event.target.checked })} />Address verified</label></div>{draft.site_key && <div className={`mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${draft.active ? "border-red-200 bg-red-50" : "border-sky-200 bg-sky-50"}`}><div><strong className="block text-sm">{draft.active ? "Archive this Site" : "Restore this Site"}</strong><p className="mt-1 text-xs text-muted-foreground">Historical work records are always preserved.</p></div><Button variant={draft.active ? "danger" : "default"} onClick={() => void setActive(!draft.active)} disabled={saving || changingStatus}>{draft.active ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}{changingStatus ? "Updating…" : draft.active ? "Archive Site" : "Restore Site"}</Button></div>}<div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button><Button onClick={() => void save()} disabled={saving || changingStatus}><Save className="size-4" />{saving ? "Saving…" : "Save Site"}</Button></div></DialogContent>}</Dialog>
   </div>

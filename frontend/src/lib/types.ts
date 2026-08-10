@@ -40,6 +40,7 @@ export type Bootstrap = {
   workers: Worker[]
   cost_centers: CostCenter[]
   locations: string[]
+  report_locations?: string[]
   ai_configured: boolean
   last_recorded_date: string
   workbook_year: number

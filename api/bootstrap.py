@@ -16,7 +16,7 @@ from api._lark_base import (
     worker_id,
 )
 from api._shared import cookie_value, json_response, verify_payload
-from report_handlers.sites import active_site_names
+from report_handlers.sites import site_selection_names
 
 
 def build_bootstrap(base: LarkBase) -> dict:
@@ -72,12 +72,12 @@ def build_bootstrap_details(base: LarkBase) -> dict:
     if hasattr(base, "table_ids"):
         base.table_ids()
     with ThreadPoolExecutor(max_workers=2) as executor:
-        sites_future = executor.submit(active_site_names, base, seed_if_empty=True)
+        sites_future = executor.submit(site_selection_names, base, seed_if_empty=True)
         days_future = executor.submit(
             base.records, "Work Days", field_names=("Work Date",), cache_seconds=60,
         )
         try:
-            locations = sites_future.result()
+            locations, report_locations = sites_future.result()
         except LarkAPIError:
             # Older Lark-only deployments can continue using historical Site
             # values until an administrator runs the updated Base setup.
@@ -92,12 +92,14 @@ def build_bootstrap_details(base: LarkBase) -> dict:
                 },
                 key=str.casefold,
             )
+            report_locations = locations
         work_days = days_future.result()
     dates = [date_value(field(record, "Work Date")) for record in work_days]
     dates = [value for value in dates if value]
     last_recorded = max(dates, default="")
     return {
         "locations": locations,
+        "report_locations": report_locations,
         "last_recorded_date": last_recorded,
         "workbook_year": int(last_recorded[:4]) if last_recorded else date.today().year,
     }

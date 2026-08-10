@@ -5,6 +5,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
+from api._lark import LarkAPIError
 from api._lark_base import (
     LarkBase,
     bool_value,
@@ -15,6 +16,7 @@ from api._lark_base import (
     number_value,
     text_value,
 )
+from report_handlers.sites import SiteResolver, load_site_resolver
 
 
 def pay_period(month: str, half: str) -> tuple[date, date]:
@@ -56,19 +58,16 @@ def load_report_data(
     if worker_key:
         day_parts.append(f"CurrentValue.[Worker Key]={formula_string(worker_key)}")
     day_filter = day_parts[0] if len(day_parts) == 1 else f"AND({','.join(day_parts)})"
-    location_parts = list(day_parts)
-    if location:
-        location_parts.append(f"CurrentValue.[Location]={formula_string(location)}")
-    location_filter = (
-        location_parts[0]
-        if len(location_parts) == 1
-        else f"AND({','.join(location_parts)})"
-    )
+    # Do not filter Location Entries by an exact Site label here. Historical
+    # labels are canonicalized below (for example "1049 Woodland" and
+    # "1073 Crosswind ="), so an exact database filter would discard them
+    # before Site Check or Payroll Check can merge their hours.
+    location_filter = day_filter
     check_filter = (
         f"CurrentValue.[Period Start]=TODATE({formula_string(check_period_start.isoformat())})"
         if check_period_start else ""
     )
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         workers_future = executor.submit(base.records, "Workers")
         days_future = executor.submit(base.records, "Work Days", filter_formula=day_filter)
         locations_future = executor.submit(
@@ -80,10 +79,17 @@ def load_report_data(
             )
             if check_period_start else None
         )
+        sites_future = executor.submit(load_site_resolver, base, seed_if_empty=True)
         worker_records = workers_future.result()
         day_records = days_future.result()
         location_records = locations_future.result()
         check_records = checks_future.result() if checks_future else []
+        try:
+            site_resolver = sites_future.result()
+        except LarkAPIError:
+            # A legacy Lark deployment without the Sites table still keeps all
+            # report data under its original labels.
+            site_resolver = SiteResolver([])
 
     workers = {}
     for record in worker_records:
@@ -114,10 +120,15 @@ def load_report_data(
         )
         center_id = text_value(field(record, "Cost Center ID"))
         center_name = text_value(field(record, "Cost Center Name"))
+        raw_location = text_value(field(record, "Location"))
+        resolved = site_resolver.resolve(raw_location)
         locations_by_day[day_key].append(
             {
                 "location_id": text_value(field(record, "Location Entry Key")),
-                "name": text_value(field(record, "Location")),
+                "name": resolved["name"],
+                "raw_name": raw_location,
+                "site_key": resolved["site_key"],
+                "site_match": resolved["method"],
                 "hours": round(location_hours, 2),
                 "regular_hours": regular,
                 "overtime_hours": overtime,

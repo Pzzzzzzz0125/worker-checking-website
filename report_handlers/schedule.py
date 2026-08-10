@@ -196,6 +196,30 @@ def _payload(body: dict, worker: dict, cost_codes: dict[str, str], current: dict
     }
 
 
+def _selected_dates(body: dict) -> list[str]:
+    """Return a normalized, unique date list for a single or batch plan."""
+    supplied = body.get("schedule_dates")
+    if supplied is not None:
+        if not isinstance(supplied, list):
+            raise ValueError("Schedule dates must be a list.")
+        dates = sorted({_date(value) for value in supplied if str(value or "").strip()})
+        if not dates:
+            raise ValueError("Choose at least one schedule date.")
+        if len(dates) > 31:
+            raise ValueError("Choose 31 dates or fewer in one batch.")
+        return dates
+    start_date = _date(body.get("schedule_date") or body.get("date"))
+    end_date = _date(body.get("schedule_end_date") or start_date)
+    if start_date > end_date:
+        raise ValueError("Schedule end date must be on or after the start date.")
+    if (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days > 30:
+        raise ValueError("Choose a schedule range of 31 days or fewer.")
+    return [
+        (date.fromisoformat(start_date) + timedelta(days=offset)).isoformat()
+        for offset in range((date.fromisoformat(end_date) - date.fromisoformat(start_date)).days + 1)
+    ]
+
+
 def _save(base, body: dict, session: dict) -> dict:
     workers = _workers(base)
     worker_key = _clean(body.get("worker_key"), 160)
@@ -205,13 +229,10 @@ def _save(base, body: dict, session: dict) -> dict:
     if not worker["active"]:
         raise ValueError("This worker is inactive and cannot be scheduled.")
     current_rows = [_row(item) for item in base.records(TABLE, cache_seconds=0)]
-    start_date = _date(body.get("schedule_date") or body.get("date"))
-    end_date = _date(body.get("schedule_end_date") or start_date)
-    if start_date > end_date:
-        raise ValueError("Schedule end date must be on or after the start date.")
-    if (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days > 30:
-        raise ValueError("Choose a schedule range of 31 days or fewer.")
-    if _clean(body.get("schedule_key"), 120) and start_date != end_date:
+    selected_dates = _selected_dates(body)
+    start_date = selected_dates[0]
+    end_date = selected_dates[-1]
+    if _clean(body.get("schedule_key"), 120) and len(selected_dates) != 1:
         raise ValueError("Edit one schedule date at a time.")
     current = next(
         (item for item in current_rows if item["schedule_key"] == _clean(body.get("schedule_key"), 120)),
@@ -220,10 +241,7 @@ def _save(base, body: dict, session: dict) -> dict:
     cost_codes = _cost_codes(base)
     planned_rows = list(current_rows)
     plans = []
-    cursor = date.fromisoformat(start_date)
-    last = date.fromisoformat(end_date)
-    while cursor <= last:
-        scheduled_date = cursor.isoformat()
+    for scheduled_date in selected_dates:
         day_body = {**body, "schedule_date": scheduled_date, "schedule_end_date": scheduled_date}
         if not _clean(body.get("schedule_key"), 120):
             day_body["schedule_key"] = ""
@@ -249,8 +267,6 @@ def _save(base, body: dict, session: dict) -> dict:
         )
         planned_rows.append(_row({"record_id": candidate["record_id"], "fields": fields}))
         plans.append((fields, candidate, conflict))
-        cursor += timedelta(days=1)
-
     saved_results = [base.set_by_key(TABLE, KEY_FIELD, fields[KEY_FIELD], fields) for fields, _, _ in plans]
     stored_rows = [
         _row({"record_id": candidate.get("record_id", ""), "fields": fields})
