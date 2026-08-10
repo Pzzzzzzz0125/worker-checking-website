@@ -78,6 +78,36 @@ function monthLabel(month: string) {
   return new Date(`${month}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" })
 }
 
+type ScheduleCalendarProps = {
+  month: string
+  onMonthChange: (month: string) => void
+  mode: "range" | "dates"
+  rangeStart: string
+  rangeEnd: string
+  selectedDates: string[]
+  onRangeDate: (date: string) => void
+  onToggleDate: (date: string) => void
+}
+
+function ScheduleCalendar({ month, onMonthChange, mode, rangeStart, rangeEnd, selectedDates, onRangeDate, onToggleDate }: ScheduleCalendarProps) {
+  const cells = calendarCells(month)
+  const rangeFrom = rangeStart && rangeEnd ? (rangeStart < rangeEnd ? rangeStart : rangeEnd) : ""
+  const rangeTo = rangeStart && rangeEnd ? (rangeStart < rangeEnd ? rangeEnd : rangeStart) : ""
+  return <div className="grid gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><strong className="text-sm">{monthLabel(month)}</strong>{mode === "range" && <p className="mt-1 text-xs text-muted-foreground">{rangeStart && !rangeEnd ? "Now choose the end date" : "Click a start date, then an end date"}</p>}</div><div className="flex gap-1"><Button type="button" variant="outline" size="icon" onClick={() => onMonthChange(shift(`${month}-01`, -1).slice(0, 7))}><ChevronLeft className="size-4" /></Button><Button type="button" variant="outline" size="icon" onClick={() => onMonthChange(shift(`${month}-01`, 31).slice(0, 7))}><ChevronRight className="size-4" /></Button></div></div>
+    <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase text-muted-foreground">{["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
+    <div className="grid grid-cols-7 gap-1">{cells.map((value, index) => {
+      if (!value) return <span key={`blank-${index}`} />
+      const selected = selectedDates.includes(value)
+      const isStart = mode === "range" && value === rangeStart
+      const isEnd = mode === "range" && Boolean(rangeEnd) && value === rangeEnd
+      const inRange = mode === "range" && Boolean(rangeFrom && rangeTo) && value >= rangeFrom && value <= rangeTo
+      return <button type="button" key={value} onClick={() => mode === "range" ? onRangeDate(value) : onToggleDate(value)} className={`relative grid min-h-10 place-items-center rounded-lg text-xs font-semibold transition-colors ${mode === "dates" && selected ? "bg-primary text-primary-foreground" : ""} ${mode === "dates" && !selected ? "bg-white hover:bg-blue-50" : ""} ${mode === "range" && inRange && !isStart && !isEnd ? "bg-blue-100 text-blue-950 hover:bg-blue-200" : ""} ${mode === "range" && (isStart || isEnd) ? "bg-primary text-primary-foreground shadow-sm" : ""} ${mode === "range" && !inRange && !isStart && !isEnd ? "bg-white hover:bg-blue-50" : ""}`} aria-label={displayDate(value, true)}>{Number(value.slice(-2))}</button>
+    })}</div>
+    {mode === "range" ? <div className="flex flex-wrap items-center gap-2 text-xs"><span className="font-semibold">{rangeStart ? `From ${displayDate(rangeStart, true)}` : "No start date"}</span><span className="text-muted-foreground">→</span><span className="font-semibold">{rangeEnd ? `To ${displayDate(rangeEnd, true)}` : "Choose end date"}</span>{(rangeStart || rangeEnd) && <button type="button" className="ml-auto text-red-600 underline" onClick={() => onRangeDate("")}>Clear range</button>}</div> : <div className="flex flex-wrap items-center gap-2 text-xs"><span className="font-semibold">{selectedDates.length} selected</span>{selectedDates.length > 0 && <button type="button" className="text-red-600 underline" onClick={() => onToggleDate("")}>Clear dates</button>}</div>}
+  </div>
+}
+
 function statusBadge(status: ScheduleRow["status"]) {
   if (status === "confirmed" || status === "approved") return <Badge variant="success">Confirmed</Badge>
   if (status === "pending_approval") return <Badge variant="warning">Needs approval</Badge>
@@ -94,6 +124,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [multipleMode, setMultipleMode] = useState<"range" | "dates">("range")
   const [selectedDates, setSelectedDates] = useState<string[]>([])
   const [calendarMonth, setCalendarMonth] = useState(() => localISO().slice(0, 7))
+  const [rangeStep, setRangeStep] = useState<"start" | "end">("start")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [reviewing, setReviewing] = useState<string | null>(null)
@@ -121,8 +152,10 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
 
   const setField = (key: keyof FormState, value: string) => setForm(current => ({ ...current, [key]: value }))
   const resetForm = () => {
-    setForm(emptyForm(localISO()))
+    const blank = emptyForm(localISO())
+    setForm(planMode === "multiple" ? { ...blank, schedule_date: "", schedule_end_date: "" } : blank)
     setSelectedDates([])
+    setRangeStep("start")
   }
   const edit = (row: ScheduleRow) => setForm({
     schedule_key: row.schedule_key,
@@ -218,7 +251,41 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   }))
   const toggleDate = (value: string) => setSelectedDates(current => current.includes(value)
     ? current.filter(date => date !== value)
-    : current.length >= 31 ? current : [...current, value].sort())
+    : value ? current.length >= 31 ? current : [...current, value].sort() : [])
+  const selectRangeDate = (value: string) => {
+    if (!value) {
+      setForm(current => ({ ...current, schedule_date: "", schedule_end_date: "" }))
+      setRangeStep("start")
+      return
+    }
+    if (rangeStep === "start" || !form.schedule_date) {
+      setForm(current => ({ ...current, schedule_date: value, schedule_end_date: "" }))
+      setRangeStep("end")
+      setCalendarMonth(value.slice(0, 7))
+      return
+    }
+    const start = form.schedule_date
+    if (value < start) {
+      setForm(current => ({ ...current, schedule_date: value, schedule_end_date: start }))
+    } else {
+      setForm(current => ({ ...current, schedule_end_date: value }))
+    }
+    setRangeStep("start")
+  }
+  const beginSingleMode = () => {
+    setPlanMode("single")
+    setSelectedDates([])
+    setRangeStep("start")
+    setForm(current => ({ ...current, schedule_date: current.schedule_date || localISO(), schedule_end_date: current.schedule_date || localISO() }))
+  }
+  const beginMultipleMode = () => {
+    setPlanMode("multiple")
+    setMultipleMode("range")
+    setSelectedDates([])
+    setRangeStep("start")
+    setForm(current => ({ ...current, schedule_date: "", schedule_end_date: "" }))
+    setCalendarMonth(localISO().slice(0, 7))
+  }
   const formDateCount = planMode === "single"
     ? (form.schedule_date ? 1 : 0)
     : multipleMode === "range"
@@ -236,10 +303,10 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
         <CardTitle>{form.schedule_key ? "Edit schedule" : "Plan work"}</CardTitle>
         <CardDescription>Overlapping Site assignments for one worker cannot be confirmed directly. They are saved only as a pending approval request.</CardDescription>
         {!form.schedule_key && <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <button type="button" className={`rounded-xl border px-4 py-3 text-left transition-colors ${planMode === "single" ? "border-primary bg-primary text-primary-foreground" : "bg-white hover:border-primary/40"}`} onClick={() => { setPlanMode("single"); setSelectedDates([]) }}>
+          <button type="button" className={`rounded-xl border px-4 py-3 text-left transition-colors ${planMode === "single" ? "border-primary bg-primary text-primary-foreground" : "bg-white hover:border-primary/40"}`} onClick={beginSingleMode}>
             <span className="block text-sm font-bold">Single day</span><span className={`mt-1 block text-xs ${planMode === "single" ? "text-blue-100" : "text-muted-foreground"}`}>Plan one worker assignment for one date.</span>
           </button>
-          <button type="button" className={`rounded-xl border px-4 py-3 text-left transition-colors ${planMode === "multiple" ? "border-primary bg-primary text-primary-foreground" : "bg-white hover:border-primary/40"}`} onClick={() => setPlanMode("multiple")}>
+          <button type="button" className={`rounded-xl border px-4 py-3 text-left transition-colors ${planMode === "multiple" ? "border-primary bg-primary text-primary-foreground" : "bg-white hover:border-primary/40"}`} onClick={beginMultipleMode}>
             <span className="block text-sm font-bold">Multiple days</span><span className={`mt-1 block text-xs ${planMode === "multiple" ? "text-blue-100" : "text-muted-foreground"}`}>Repeat this assignment across a range or selected dates.</span>
           </button>
         </div>}
@@ -247,8 +314,8 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
       <CardContent><form className="grid gap-4" onSubmit={save}>
         <div className="grid gap-4 md:grid-cols-4">
           {planMode === "single" || form.schedule_key ? <label className="field-label">Schedule date<Input type="date" value={form.schedule_date} onChange={event => setField("schedule_date", event.target.value)} required /><span className="mt-1 block text-xs text-muted-foreground">One assignment date</span></label> : <div className="md:col-span-2 grid gap-3 rounded-xl border bg-slate-50 p-3">
-            <div className="flex flex-wrap gap-2"><button type="button" className={`rounded-lg px-3 py-2 text-xs font-semibold ${multipleMode === "range" ? "bg-primary text-primary-foreground" : "bg-white"}`} onClick={() => setMultipleMode("range")}>Date range</button><button type="button" className={`rounded-lg px-3 py-2 text-xs font-semibold ${multipleMode === "dates" ? "bg-primary text-primary-foreground" : "bg-white"}`} onClick={() => setMultipleMode("dates")}>Select dates</button></div>
-            {multipleMode === "range" ? <div className="grid gap-3 sm:grid-cols-2"><label className="field-label">From<Input type="date" value={form.schedule_date} onChange={event => setField("schedule_date", event.target.value)} required /></label><label className="field-label">To<Input type="date" value={form.schedule_end_date} min={form.schedule_date} onChange={event => setField("schedule_end_date", event.target.value)} required /></label></div> : <div className="grid gap-3"><div className="flex items-center justify-between"><strong className="text-sm">{monthLabel(calendarMonth)}</strong><div className="flex gap-1"><Button type="button" variant="outline" size="icon" onClick={() => setCalendarMonth(value => shift(`${value}-01`, -1).slice(0, 7))}><ChevronLeft className="size-4" /></Button><Button type="button" variant="outline" size="icon" onClick={() => setCalendarMonth(value => shift(`${value}-01`, 31).slice(0, 7))}><ChevronRight className="size-4" /></Button></div></div><div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase text-muted-foreground">{["M", "T", "W", "T", "F", "S", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="grid grid-cols-7 gap-1">{calendarCells(calendarMonth).map((value, index) => value ? <button type="button" key={value} onClick={() => toggleDate(value)} className={`grid min-h-9 place-items-center rounded-lg text-xs font-semibold ${selectedDates.includes(value) ? "bg-primary text-primary-foreground" : "bg-white hover:bg-blue-50"}`}>{Number(value.slice(-2))}</button> : <span key={`blank-${index}`} />)}</div><div className="flex flex-wrap items-center gap-2 text-xs"><span className="font-semibold">{selectedDates.length} selected</span>{selectedDates.length > 0 && <button type="button" className="text-red-600 underline" onClick={() => setSelectedDates([])}>Clear dates</button>}</div></div>}
+            <div className="flex flex-wrap gap-2"><button type="button" className={`rounded-lg px-3 py-2 text-xs font-semibold ${multipleMode === "range" ? "bg-primary text-primary-foreground" : "bg-white"}`} onClick={() => { setMultipleMode("range"); setSelectedDates([]); setForm(current => ({ ...current, schedule_date: "", schedule_end_date: "" })); setRangeStep("start") }}>Date range</button><button type="button" className={`rounded-lg px-3 py-2 text-xs font-semibold ${multipleMode === "dates" ? "bg-primary text-primary-foreground" : "bg-white"}`} onClick={() => { setMultipleMode("dates"); setForm(current => ({ ...current, schedule_date: "", schedule_end_date: "" })); setRangeStep("start") }}>Select dates</button></div>
+            <ScheduleCalendar mode={multipleMode} month={calendarMonth} onMonthChange={setCalendarMonth} rangeStart={form.schedule_date} rangeEnd={form.schedule_end_date} selectedDates={selectedDates} onRangeDate={selectRangeDate} onToggleDate={toggleDate} />
             <span className="text-xs text-muted-foreground">{formDateCount || 0} date{formDateCount === 1 ? "" : "s"} will be created. Maximum 31 dates.</span>
           </div>}
           <label className="field-label">Worker<select className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm" value={form.worker_key} onChange={event => setField("worker_key", event.target.value)} required><option value="">Select worker…</option>{workers.map(worker => <option key={worker.worker_key || worker.id} value={worker.worker_key || String(worker.id)}>{worker.name}</option>)}</select></label>
