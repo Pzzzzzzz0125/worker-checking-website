@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlparse
 
 from api._lark import LarkAPIError
 from api._lark_sync import synchronize_lark
@@ -20,22 +21,19 @@ def _signed_in(handler: BaseHTTPRequestHandler) -> dict | None:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if not _signed_in(self):
-            return
-        if not lark_mirror_enabled():
-            json_response(
-                self,
-                {
-                    "enabled": False,
-                    "pending": 0,
-                    "retrying": 0,
-                    "synced_last_24h": 0,
-                    "last_synced_at": "",
-                },
-            )
+        current = _signed_in(self)
+        if not current:
             return
         try:
-            json_response(self, PostgresBase().sync_status())
+            details = parse_qs(urlparse(self.path).query).get("details", [""])[0]
+            include_errors = details in {"1", "true", "yes"}
+            if include_errors and current.get("sub") not in admin_ids():
+                json_response(self, {"error": "Only a configured Lark administrator can view sync errors."}, 403)
+                return
+            result = PostgresBase().sync_status(include_errors=include_errors)
+            if not result["enabled"]:
+                result["message"] = "Lark mirroring is disabled; the queue is preserved but not processed."
+            json_response(self, result)
         except LarkAPIError as error:
             json_response(self, {"error": str(error)}, error.status)
 

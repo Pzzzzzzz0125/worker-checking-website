@@ -861,7 +861,7 @@ class PostgresBase:
                 status=503,
             ) from queue_error
 
-    def sync_status(self) -> dict:
+    def sync_status(self, *, include_errors: bool = False) -> dict:
         try:
             with _connection() as connection:
                 with connection.cursor() as cursor:
@@ -877,19 +877,54 @@ class PostgresBase:
                             COUNT(*) FILTER (
                                 WHERE status = 'synced'
                                   AND synced_at >= NOW() - INTERVAL '24 hours'
-                            ) AS synced_last_24h,
+                    ) AS synced_last_24h,
                             MAX(synced_at) AS last_synced_at
                         FROM workforce_sync_outbox
                         """
                     )
                     pending, retrying, recent, last_synced = cursor.fetchone()
-            return {
+                    error_samples = []
+                    if include_errors:
+                        cursor.execute(
+                            """
+                            SELECT table_name, key_value, operation, attempts,
+                                   last_error, created_at, available_at
+                            FROM workforce_sync_outbox
+                            WHERE last_error IS NOT NULL
+                            ORDER BY id DESC
+                            LIMIT 25
+                            """
+                        )
+                        error_samples = [
+                            {
+                                "table_name": table_name,
+                                "key_value": key_value,
+                                "operation": operation,
+                                "attempts": int(attempts or 0),
+                                "error": last_error,
+                                "created_at": created_at.isoformat() if created_at else "",
+                                "available_at": available_at.isoformat() if available_at else "",
+                            }
+                            for (
+                                table_name,
+                                key_value,
+                                operation,
+                                attempts,
+                                last_error,
+                                created_at,
+                                available_at,
+                            ) in cursor.fetchall()
+                        ]
+            result = {
                 "enabled": lark_mirror_enabled(),
                 "pending": int(pending or 0),
                 "retrying": int(retrying or 0),
                 "synced_last_24h": int(recent or 0),
                 "last_synced_at": last_synced.isoformat() if last_synced else "",
             }
+            if include_errors:
+                result["error_samples"] = error_samples
+            return result
         except Exception as error:
             raise LarkAPIError(
                 f"Could not inspect the Lark sync queue: {type(error).__name__}.",
