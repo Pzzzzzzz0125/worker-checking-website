@@ -1,16 +1,85 @@
 # Speed Construction Workforce App
 
 Maintainer handoff and implementation reference
-Last reviewed against the code: **August 8, 2026**
+Last reviewed against the code: **August 11, 2026**
 
-This repository contains the production workforce recording and payroll-review
-website developed for Speed Construction. The application records daily work,
-sites, cost codes, hours, overtime, and extra pay; provides payroll and
-site summaries; manages worker profiles; imports the original 2026
-workbooks; and mirrors operational data to Lark for people who prefer a visible
-spreadsheet-style record.
+## What this application is
 
-The application was developed by **Zihao (Paul) Zhao**.
+The Speed Construction Workforce App is the company's shared system for
+planning field work, recording what actually happened, and turning those work
+records into information that operations and payroll can review. It replaces a
+workflow that depended on large spreadsheets, inconsistent address names,
+messages from multiple foremen, and repeated manual calculations.
+
+In practical terms, the app answers four everyday questions:
+
+1. **What is supposed to happen?** Schedule managers can plan which worker will
+   go to which Site, on which date, for which task and Cost Code.
+2. **What actually happened?** Entry users can record one day's workers, one
+   worker's month, or use AI to turn a written field report into proposals.
+3. **How should the work be reviewed?** Authorized users can inspect regular
+   and weighted payroll hours, overtime, estimated labor cost, Site usage, and
+   missing Cost Codes without rebuilding formulas in Excel.
+4. **How is the information shared?** Administrators can generate auditor
+   reports and invoices, while a one-way Lark mirror provides a familiar,
+   human-readable spreadsheet view of saved work.
+
+The app is intended for foremen, operations staff, payroll reviewers, and the
+administrator responsible for workforce records. It is a workforce recording
+and review tool; it is **not** a payroll filing service, accounting ledger,
+time-clock, GPS tracker, or two-way Lark editor.
+
+### What problem it solves
+
+Without this app, the same information can appear differently in several
+places: a Site may be written as `850 Villa`, `1260 = 850 villa =`, or a full
+postal address; a worker may be referred to by an alias; and an eight-hour day
+may be divided across several Sites and Cost Codes. The app gives these records
+stable worker/date keys, validates new entries, preserves the historical text,
+and resolves recognized Site aliases into a formal address for reporting.
+
+The operational result is one traceable path:
+
+```text
+Plan upcoming work (Schedule)
+        |
+        v
+Record and confirm actual work (Daily Entry / Worker Entry / AI Reading)
+        |
+        v
+Validate Sites, Cost Codes, hours, time ranges, and overrides
+        |
+        v
+Save authoritative records in PostgreSQL
+        |
+        +--> Overview, Payroll Check, and Site Check update from those records
+        +--> Auditor reports and invoices can be generated
+        +--> A background outbox mirrors the saved data to Lark
+```
+
+Planned Schedule rows and actual Entry rows are intentionally separate.
+Scheduling a worker does not by itself add payroll hours. Only a confirmed work
+entry becomes part of Overview, Payroll Check, Site Check, and payroll-oriented
+exports.
+
+### A typical day in the app
+
+1. A Schedule Manager creates next week's assignments. Non-conflicting rows are
+   confirmed; conflicting rows wait for approval.
+2. After work is performed, an Entry User opens Daily Entry and records the
+   actual Site, Cost Code, hours, overtime, extra pay, and notes. The user may
+   instead update one worker across several dates in Worker Entry.
+3. The backend validates the complete record and saves it to PostgreSQL. The
+   same transaction queues a Lark mirror event, but the user does not wait for
+   Lark to finish.
+4. Overview and report pages read the new database record. Authorized payroll
+   staff can check the worker, inspect the daily history, and mark the selected
+   date range as reviewed.
+5. An authorized user can download an auditor workbook or prepare an invoice.
+   The connected Lark workbook is updated asynchronously as a visible copy.
+
+The application was developed by **Zihao (Paul) Zhao** for Speed Construction,
+an AlphaX company.
 
 > This README explains how the software works. Use
 > [DEPLOYMENT.md](DEPLOYMENT.md) for account setup, environment variables,
@@ -155,135 +224,365 @@ configuration.
 Generated frontend files live in `static/app-ui/` and `static/index.html`.
 They are built by Vercel and intentionally ignored by Git.
 
-## 4. User-facing functions
+## 4. Complete user and data workflows
 
-### Overview
+This section follows the application from the user's point of view. Each page
+description explains the action, validation, database effect, and downstream
+effect. It is the first place to check when deciding whether a reported result
+is expected behavior or a bug.
 
-- Select a date range and optionally a worker.
-- Shows compact totals and a period summary; Recent Activity was removed to
-  keep the page focused and lightweight.
-- Reads Work Days only. It deliberately does not load all site-entry records.
-- Sites are loaded after initial startup by `bootstrap_details` and cached
-  in browser local storage.
+### 4.1 Sign in, startup, and navigation
 
-This design replaced a graph-heavy overview because repeated pagination of
-thousands of Lark records made the deployed application feel stuck.
+1. The signed-out visitor clicks **Sign in with Lark**. Lark OAuth identifies
+   the employee; the browser never receives the Lark App Secret.
+2. The callback creates a signed, HTTP-only session cookie and returns the user
+   to the single-page application.
+3. `/api/bootstrap` loads the small essential set of active workers, Cost
+   Codes, current identity, permissions, and configuration.
+4. Site suggestions load separately through `/api/bootstrap_details`. A cached
+   copy can be displayed first, so startup does not wait for every historical
+   Location Entry.
+5. The sidebar is filtered by role. Viewer-only users do not see Entry tools;
+   only Schedule Managers and Super Admins see Schedule.
+6. Page bundles load only when opened. A global spinner and button-level
+   loading states tell the user when a request is still running.
 
-### Payroll check
+Changing pages changes only the browser route (`#overview`, `#daily`, and so
+on). It does not duplicate data. Daily Entry and Worker Entry keep unsaved
+drafts in the same browser and warn before browser unload when possible.
 
-- Protected by Lark administrator access or `PAYROLL_PASSWORD`.
-- Selects any From/To range and optionally one worker.
-- Convenient presets provide Last 7 days, This month, 1–15, and 16–end; the
-  active preset is visibly selected and manual date edits create a custom range.
-- Each row separately shows regular hours, total hours, California overtime,
-  estimated payroll cost, days, and checked state.
-- Clicking a worker expands the history immediately below that worker.
-- The expanded table shows date, each site, allocated site hours, cost codes,
-  regular hours, overtime, double time, actual hours, weighted hours,
-  and estimated daily cost.
-- Time ranges are intentionally hidden in payroll history because historical
-  imports did not contain trustworthy ranges.
-- Checked state is stored in `Payroll Checks`, not browser state, and is
-  isolated by worker plus both range start and range end.
+### 4.2 Shared save workflow
+
+Every normal business write follows this path:
+
+```text
+User clicks Save / Approve / Check / Archive
+  -> frontend sends authenticated data
+  -> backend verifies role or password grant
+  -> backend validates the complete request
+  -> one PostgreSQL transaction changes stable keyed records
+  -> the same transaction queues Lark outbox events
+  -> API returns the saved result
+  -> the UI updates and Lark synchronization continues in background
+```
+
+PostgreSQL is authoritative. A slow or unavailable Lark API does not roll back
+an otherwise successful database save. The header can therefore show **Saved ·
+Lark sync pending**: the website record is safe, but its visible Lark copy has
+not caught up yet. See Section 9 for mirror behavior.
+
+### 4.3 Overview
+
+**Purpose:** answer “how much work occurred in this period?” without opening
+payroll detail.
+
+1. Choose **From** and **To**, optionally type a worker, or select Last 7 days,
+   This month, 1–15, or 16–end. The selected preset turns navy and displays a
+   check. Manually changing a date creates a custom range.
+2. Click **Apply**. A partial worker name must resolve to a real active worker;
+   otherwise the page reports that no worker matched.
+3. The page displays regular hours, weighted payroll hours, active workers,
+   worked days, actual hours, average workday, off records, extra pay, and the
+   latest worked date.
+4. The lightweight Hours Trend groups a long range by day, week, or month.
+   Blue is regular hours; amber is the additional payroll weight created by
+   overtime and double time.
+5. **Refresh** bypasses the five-minute page cache. Successful application
+   writes also invalidate cached Overview results.
+
+Overview is read-only. It calculates the chart and summary from Work Days and
+worker metadata; it does not create checks or change recorded hours. Keeping
+this API aggregated avoids downloading and rendering thousands of raw rows.
+
+### 4.4 Payroll Check
+
+**Purpose:** review a worker's work and estimated cost before payroll is
+processed.
+
+1. A Lark administrator enters automatically. Another authorized employee
+   enters the shared Payroll password. A successful unlock creates a signed,
+   user-bound eight-hour cookie and also unlocks Site Check.
+2. Choose any From/To range, optionally filter one worker, or use the same four
+   convenient presets as Overview. Click **Apply**.
+3. The server also reads surrounding Monday–Sunday weeks, so W-2 weekly
+   overtime stays correct when a selected range crosses a pay-period boundary.
+4. The table shows classification, regular hours, weighted payroll hours,
+   California overtime/double time, estimated cost, and worked dates. W-2 names
+   are red; 1099 names are black.
+5. Click a column header to sort and click again to reverse it.
+6. Click a worker to expand their daily history immediately below the row;
+   click the same worker again to collapse it. Detail includes Site and Site
+   hours, Cost Codes, regular/OT/double-time/actual/weighted hours, daily cost,
+   summaries by Site and Cost Code, missing Cost Codes as `--`, and matching
+   total estimated costs. Historical time ranges are intentionally hidden.
+7. Check a worker only after review. The app stores Checked, Checked By, and
+   Checked At under a key containing that worker and the exact From/To range.
+   Unchecking updates the same database record.
+
+Opening, expanding, and sorting are read-only. The checkbox changes only
+Payroll Checks; it does not change Entry hours. If an underlying Entry is later
+edited, the calculated amounts change while the range-specific check remains,
+so payroll staff should operationally review changed periods again.
 
 Payroll is an estimate and must be reviewed by the company payroll owner.
 
-### Sites
+### 4.5 Site Check
 
-- Protected by the same Lark-admin/`PAYROLL_PASSWORD` grant as Payroll Check.
-  Unlocking either page unlocks both for eight hours.
-- Selects a site and date range.
-- Shows workers, hours, days, first/last work date, cost codes, and estimated
-  labor cost.
-- Uses worker classification/rate and the same California weighting helper as
-  payroll.
-- Includes surrounding calendar weeks when calculating W-2 weekly overtime,
-  even when the selected report range begins or ends in the middle of a week.
+**Purpose:** answer “who worked at this Site, when, for how many hours, under
+which Cost Codes, and at what estimated labor cost?”
 
-### Daily entry
+1. Unlock with the same administrator/Payroll grant used by Payroll Check.
+2. Search or select a Site and choose the report dates.
+3. Historical labels are resolved at read time. A verified formal Site or alias
+   is preferred; a unique compatible address/number is merged; otherwise the
+   original historical label stays visible. Values containing `=` are
+   preserved but can aggregate into a confirmed formal Site.
+4. The page lists workers, regular and weighted payroll hours, first/last work
+   date, estimated labor cost, and Cost Code distribution for that Site.
+5. Column arrows sort the list. Clicking a worker opens that worker's detail
+   for the selected Site; clicking again closes it.
 
-- Choose one date and edit any number of workers.
-- Worker search filters the page.
-- Copy one worker's day and paste it to another worker.
-- Save one worker or all dirty workers.
-- `Clear record` deletes the saved Work Day and all linked Location Entries
-  after confirmation.
-- Unsaved drafts are kept in browser local storage for the selected date.
-- A global loading indicator appears while API requests are active.
+Site Check is read-only. It joins Work Days, Location Entries, Workers, Cost
+Codes, and formal Site mappings. It uses the same California weighting helper
+as Payroll and reads surrounding weeks when needed. Formalization changes how
+compatible labels group in reports; it does not rewrite historical work rows.
 
-### Worker entry
+### 4.6 Daily Entry
 
-- Choose one worker and one month.
-- Edit several dates for that worker.
-- Select all dates or selected dates.
-- Copy selected dates to one or more workers.
-- Search target workers in the copy dialog.
-- Existing target records on those dates are replaced after confirmation.
-- Newly changed blank days use the same default time behavior as Daily Entry.
+**Purpose:** record several workers for one date.
 
-### AI reading
+1. Select a date. The server returns every active worker plus any saved Work
+   Day and Site allocations for that date. Search changes only what is visible.
+2. Editing creates a browser draft immediately. PostgreSQL and all report pages
+   remain unchanged until Save. Returning to the same date in the same browser
+   restores the draft; browser unload also produces a warning when possible.
+3. Select **Worked** or **Off**. A worked day needs at least one Site and at
+   least one Cost Code per Site. Enter or adjust each Site's Start, End, and
+   Hours; then add overtime, extra pay, and notes when needed.
+4. The first new Site begins with the standard 08:30/eight-hour defaults. Later
+   Sites continue from the previous End and fill the remaining standard day.
+   Users can change every value; linked time behavior is detailed in Section 5.
+5. If official totals disagree with Site allocations or calculated overtime,
+   the page shows the difference and requires an override reason before Save.
+6. **Copy** captures one worker's draft in browser memory. **Paste** places it
+   into another worker's draft; Paste alone does not write the database.
+7. **Save** writes one worker. **Save all** writes every dirty worker. The
+   backend validates the complete payload, then upserts one Work Day and its
+   linked Location Entries. Successful drafts clear; failed ones remain visible.
+8. **Clear record** requires confirmation and deletes the saved Work Day plus
+   linked allocations. It is different from saving an Off day.
 
-1. The user pastes unstructured schedule text and chooses a year.
-2. `/api/ai/parse` sends the text to Gemini from the server.
-3. The response is matched against real workers and cost centers locally.
-4. The page shows confidence, warnings, proposed values, and existing-record
-   warnings.
-5. The user edits/selects rows and explicitly confirms them.
-6. `/api/ai/apply` validates the selected rows again and stores them.
+After Save, Overview, Payroll Check, Site Check, reports, and the Lark outbox
+reflect the result. Saving an existing worker/date replaces that day's stored
+allocations with the newly validated set; stable keys prevent duplicate days.
 
-Gemini never writes directly to the database. A missing or ambiguous worker,
-date, location, or required cost center blocks that proposal.
+### 4.7 Worker Entry
 
-### Worker management
+**Purpose:** record or correct many dates for one worker.
 
-- Protected by a configured Lark administrator or
-  `WORKER_ADMIN_PASSWORD`.
-- Active workers are the default list; archived workers are available through
-  the dedicated Archived workers filter.
-- Add a worker. The backend assigns the next stable numeric Worker Key.
-- Edit name, W-2/1099 type, rate, display order, aliases, and notes.
-- Worker Key is immutable; Normalized Name is generated by the backend.
-- Archiving always preserves the worker profile and all historical records.
-- Archived workers disappear from Overview, Payroll, Sites, AI, Daily
-  Entry, and Worker Entry.
-- Restore returns the worker to all operational pages without recreating or
-  changing historical records.
+1. Select an active worker and month. The server returns every date in that
+   month, including blank dates, worked days, and Off days.
+2. Edit a date with the same Site/Cost Code/time/hour editor and validation as
+   Daily Entry. Drafts are stored by worker and month in this browser.
+3. The sticky **Save edited** bar remains at the bottom of the viewport and
+   saves all dirty dates. No payroll or report data changes before Save.
+4. Select source dates and open Copy. Search and Select all help choose target
+   workers; target dates can be a continuous range or individual dates.
+5. Copying to the same worker on the same date is blocked because it has no
+   useful effect and can conceal a selection mistake.
+6. A valid copy can target other dates for the same worker, the same dates for
+   other workers, or both. Existing target records are replaced only after the
+   confirmation in the copy dialog.
+7. The backend generates and validates each target worker/date through the
+   normal Entry path. Copy cannot bypass required Cost Codes, active-worker
+   checks, time rules, or numeric validation.
 
-### Import
+Saved database and downstream effects are identical to Daily Entry.
 
-- Restricted to Lark identities in `LARK_ADMIN_OPEN_IDS`; there is no password
-  fallback.
-- Reads exactly three files from the configured Lark Drive folder:
-  - `2026 Worker's information - location standardized.xlsx`
-  - `Cost Code and Cost Type Keep the Most Updated.xlsx`
-  - `Speed Payroll.xlsx`
-- Preview is read-only and reports counts, totals, date range, and warnings.
-- Confirmed import runs resumable stages and creates only missing stable keys.
-- This importer is a historical bootstrap tool, not the daily update path.
+### 4.8 AI Reading
 
-### Export
+**Purpose:** turn an inconsistently formatted foreman message into reviewable
+Entry proposals.
 
-- Protected by `EXPORT_PASSWORD`, even for Lark administrators.
-- The unlock cookie is signed, bound to the signed-in user, and expires in
-  eight hours.
-- The connected **Speed Construction Work Schedule** remains available as the
-  one-way Lark spreadsheet mirror.
-- Export first opens a document chooser; the connected schedule, auditor
-  report, and invoice each have an independent configuration page.
-- **Worker Compensation Auditor Report** accepts From/To dates plus searchable
-  multi-select Worker and Site filters. An empty selection means all; otherwise
-  only checked workers/sites are included. It exports one row per
-  worker/date/site/cost-code allocation, with recorded time, total hours, and
-  California regular/OT allocation.
-- **Speed Invoice Template** asks for Bill To, Job Address, Description,
-  invoice date, payment terms, Unit Price, and Amount. Its invoice number and
-  fixed Speed Construction information are automatic. The same completed
-  invoice can be downloaded as the approved editable Excel workbook or as a
-  print-ready PDF; both formats use the same invoice number and values.
-- Spreadsheet reports are generated from the approved `.xlsx` templates in
-  `templates/`; formatting is retained and the browser downloads the result.
-  Invoice PDFs are rendered directly by the server so deployment does not
-  depend on Microsoft Office or LibreOffice.
+1. Paste the message and choose the intended year.
+2. `/api/ai/parse` sends the text to Gemini from the Python backend; the API key
+   remains server-side.
+3. Gemini proposes workers, dates, Sites, hours, overtime, extra pay, and notes.
+   The backend then matches names/aliases and Cost Codes against real app data.
+4. The page shows confidence, warnings, proposed normalized values, and whether
+   that worker/date already has a saved record.
+5. The user corrects proposals, selects only the rows to apply, and confirms.
+6. `/api/ai/apply` repeats normal Entry authorization and validation. Missing or
+   ambiguous workers, invalid dates, missing required Cost Codes, or invalid
+   allocations block the affected proposal.
+7. Confirmed rows become ordinary Work Days and Location Entries and affect all
+   reports exactly like manually entered work.
+
+Gemini never writes directly to PostgreSQL and cannot bypass human review.
+
+### 4.9 Schedule
+
+**Purpose:** plan future assignments without prematurely creating payroll
+records. Only Schedule Managers and Super Admins can open this page.
+
+1. Choose **Single day** or **Multiple days**. Multiple-day mode supports a
+   continuous range or individually selected dates. In range mode, the first
+   calendar click sets Start, the second sets End, and included dates are
+   highlighted. One submission can cover at most 31 dates.
+2. Select an active worker, required Site, at least one required Cost Code, and
+   required task. Start/End and notes are optional.
+3. Save creates one stable Schedule row per worker/date. Non-conflicting rows
+   are Confirmed.
+4. An overlapping assignment for the same worker at another Site becomes
+   **Needs approval**. The conflict and submitting identity are retained rather
+   than silently confirming both assignments.
+5. A Schedule Manager can approve or reject pending rows. Edit updates a row;
+   Cancel retains it with Cancelled status. Reviewer identity remains available
+   for accountability.
+6. Weekly assignments can be searched by worker, Site, Cost Code, task, or
+   status.
+
+Schedule and Entry are intentionally separate. Schedule rows do not create Work
+Days, payroll hours, Site costs, or Overview totals. Confirmed plans may be
+copied into Entry in a later workflow, but only a real saved Entry counts as
+actual work. Pending, rejected, and cancelled plans must never affect payroll.
+
+### 4.10 Workers
+
+**Purpose:** maintain worker identity and payroll metadata that Entry users
+should not edit.
+
+1. A Lark administrator enters automatically; another administrator uses
+   `WORKER_ADMIN_PASSWORD`, producing a signed eight-hour grant.
+2. Search/filter Active or Archived workers. Active management results are
+   sorted by name.
+3. **Add worker** accepts name, W-2/1099 type, daily salary/rate, display order,
+   aliases, notes, and active state. The backend assigns an immutable numeric
+   Worker Key and generates Normalized Name.
+4. **Edit** changes the profile. Classification/rate changes alter future
+   calculations and regenerated estimates for historical work because reports
+   use the current profile, not a rate snapshot stored on every day.
+5. **Remove/Archive** preserves the worker and all history but removes the
+   person from operational Entry, AI, Schedule, Overview, Payroll, and Site
+   lists.
+6. Filter Archived workers and **Restore** to reactivate the same Worker Key and
+   its existing history. Do not create a second profile to restore someone.
+
+### 4.11 Site Management
+
+**Purpose:** maintain the formal address book and connect inconsistent old Site
+text to consistent report names. Access uses the same grant as Workers.
+
+1. Search Active, Archived, or Needs Review Sites by name, address, city, ZIP,
+   or alias.
+2. **Add/Edit Site** stores display name, postal address components,
+   semicolon-separated aliases, optional default Cost Code IDs, notes, Active,
+   and Address Verified.
+3. Saving refreshes future Entry, Schedule, invoice, and Site suggestions.
+   Reports group compatible legacy aliases under the formal Site at read time.
+4. **Archive** removes a Site from new Entry/Schedule selections while retaining
+   history. **Restore** makes it selectable again.
+5. Needs Review lists unmatched or ambiguous historical labels. **Formalize**
+   starts a draft with the raw label as an alias; an administrator confirms the
+   real address rather than accepting an uncertain guess.
+6. Address-library XLSX/CSV **Merge** adds and updates. **Replace active
+   library** also archives active Sites omitted from the file and requires an
+   extra confirmation.
+
+Formalization never rewrites old Location Entry text or hours. It changes
+reference data, future choices, and report grouping.
+
+### 4.12 Import
+
+**Purpose:** perform a controlled, resumable historical bootstrap—not daily
+recording.
+
+1. Only identities in `LARK_ADMIN_OPEN_IDS` can open Import; there is no
+   password fallback.
+2. **Preview source files** reads the following configured Lark Drive files and
+   makes no changes:
+   - `2026 Worker's information - location standardized.xlsx`
+   - `Cost Code and Cost Type Keep the Most Updated.xlsx`
+   - `Speed Payroll.xlsx`
+3. Preview displays worker/day/Site/Cost Code counts, date range, warnings, and
+   a safe-to-write decision. A blocked preview disables Import.
+4. **Import verified preview** requires confirmation and runs Workers, Cost
+   Codes, Work Days, Location Entries, and Audit stages sequentially.
+5. Each stage creates missing stable keys and preserves records already present.
+   An interrupted run can be resumed by running Import again.
+6. Site extraction scans the imported work and creates archived/unverified Site
+   Management review items for uncovered historical labels.
+7. **Extract Sites for review** can be run separately later. It creates only
+   missing candidates and does not guess or save formal addresses.
+
+A large import also creates a large Lark outbox backlog. Do not repeatedly run
+Import because the mirror is still pending; monitor synchronization separately.
+
+### 4.13 Export
+
+**Purpose:** create controlled documents from saved records without changing
+the source data. Export always requires `EXPORT_PASSWORD`, even for a Lark
+administrator. Its signed, user-bound unlock expires after eight hours.
+
+The chooser opens an independent setup page for each output:
+
+**Connected work-schedule spreadsheet**
+
+1. Open the existing Speed Construction Work Schedule or initialize/refresh it.
+2. The workbook has half-month tabs, dates across row 1, workers in column A,
+   and a normalized worker/date work block in each cell.
+3. PostgreSQL stores the workbook token, so refresh keeps the same Lark link.
+   A full refresh rebuilds content/formatting; normal Entry saves update affected
+   cells asynchronously.
+
+**Worker Compensation Auditor Report**
+
+1. Choose inclusive From/To dates.
+2. Search and explicitly select workers and Sites. The form starts with nothing
+   selected. **Select all** turns every item blue and changes to **Clear all**.
+3. Download remains disabled until at least one worker and Site are selected.
+4. The server fills the approved XLSX template with matching worker/date/Site/
+   Cost Code allocations, recorded time, total hours, and California regular/
+   overtime allocation. The downloaded report does not mark payroll checked.
+
+**Speed Invoice Template**
+
+1. Fixed company/license/contact/footer values and the invoice number are
+   automatic.
+2. The user completes Bill To, Job Address, Description and Amount, Date,
+   payment terms, Unit Price, and Amount. Saved Sites appear as Job Address
+   suggestions, but a matching Site is not currently required.
+3. Excel produces the approved editable workbook; PDF produces a print-ready
+   document. Both use the same values and displayed invoice number for that
+   form session.
+4. Invoice generation downloads a document; it does not send email, create an
+   accounts-receivable entry, or record payment.
+
+Spreadsheet formatting comes from approved templates under `templates/`.
+Invoice PDFs render on the server without Microsoft Office or LibreOffice.
+
+### 4.14 Settings & access
+
+**Purpose:** identify users automatically and manage role-based permissions.
+
+1. Opening Settings reads the signed-in Lark identity and automatically
+   registers its Open ID. Employees never type their own ID. The Copy button is
+   available when an administrator needs the exact Open ID elsewhere.
+2. The page shows Viewer, Entry User, Schedule Manager, and Super Admin levels,
+   highlighting the current role.
+3. A non-admin user selects a requested role, supplies a reason, and clicks
+   **Send request**. The request appears immediately in every Super Admin queue;
+   the app also attempts a Lark Bot message to Super Admins.
+4. One pending request is allowed at a time. Its Approved/Rejected state and
+   review note remain visible to the requester.
+5. A Super Admin can approve/reject requests or directly change a registered
+   user's role. The sidebar refreshes after the role changes.
+6. Environment-listed recovery administrators cannot be demoted in the UI.
+
+Role changes affect future access, not historical records. Payroll/Site Check,
+Worker/Site Management, Import, and Export have the additional grants shown in
+Section 10; receiving Entry or Schedule access does not automatically reveal
+sensitive payroll or export data.
 
 ## 5. Entry model and validation rules
 
@@ -435,6 +734,8 @@ Amounts are rounded to two decimals after aggregation.
 | Location Entries | `Location Entry Key` | location, recorded hours, cost center, range, and payroll allocation |
 | Cost Centers | `Cost Center ID` | selectable cost-center reference |
 | Payroll Checks | `Payroll Check Key` | checked state per worker/pay period |
+| Schedules | `Schedule Key` | planned worker/date/Site/task, conflict state, submitter, and reviewer |
+| Sites | `Site Key` | formal address library, aliases, verification, and active state |
 | Audit Log | `Audit Key` | actor and old/new JSON for changes |
 | Work Log | `Entry Key` | Lark-only consolidated worker/day projection |
 
@@ -443,7 +744,8 @@ Typical keys:
 ```text
 Work Day Key       = <worker key>|<YYYY-MM-DD>
 Location Entry Key = <work day key>|<location/allocation suffix>
-Payroll Check Key  = <worker key>|<period start>
+Payroll Check Key  = <worker key>|<period start>|<period end>
+Schedule Key       = SCH-<YYYY-MM-DD>-<generated suffix>
 ```
 
 Do not change stable keys to array indexes or names. Worker names and display
@@ -503,6 +805,8 @@ year, and stable worker-row assignments.
 - Location Entries
 - Cost Centers
 - Payroll Checks
+- Schedules
+- Sites
 - Audit Log
 - Work Log
 
@@ -622,6 +926,11 @@ All business APIs require Lark login unless marked public.
 | POST | `/api/workers/restore` | restore archived worker; management access |
 | GET | `/api/workers/access` | management authorization state |
 | POST | `/api/workers/unlock` | issue management password grant |
+| GET/POST | `/api/sites/library` | list/save formal Site library; management access |
+| POST | `/api/sites/delete` | archive Site; management access |
+| POST | `/api/sites/restore` | restore Site; management access |
+| POST | `/api/sites/import` | merge/replace formal Site address file; management access |
+| POST | `/api/sites/extract` | create Site formalization review candidates; management access |
 | GET | `/api/payroll/access` | payroll authorization state |
 | POST | `/api/payroll/unlock` | issue payroll password grant |
 | POST | `/api/ai/parse` | Gemini proposal |
@@ -760,12 +1069,19 @@ High-risk changes require focused manual checks:
 
 ## 16. Known limitations and future work
 
-- Normal signed-in users do not yet have Foreman/Viewer roles; role granularity
-  is limited to protected sections.
+- Roles are intentionally limited to Viewer, Entry User, Schedule Manager, and
+  Super Admin. There is not yet a separate Foreman role, per-Site permission,
+  delegated approver list, or granular document permission model.
 - Lark mirroring is triggered by app activity, not a dedicated continuous
   worker or cron. A closed app can leave pending rows until the next drain.
 - The Lark event endpoint acknowledges callbacks but does not import Lark edits.
 - Connected Lark Sheet and Work Log are reporting mirrors, not two-way editors.
+- Schedule is a controlled planning record. It does not automatically create an
+  actual Entry, create payroll time, or send reminders/messages yet.
+- Site aliases improve report grouping but do not perform paid geocoding,
+  distance calculation, routing, or address validation.
+- Invoice generation creates files only; email, text, Lark delivery, payment
+  tracking, and customer/contact management are future work.
 - There is no automated browser end-to-end suite.
 - Python runtime version is not explicitly pinned in repository configuration;
   verify Vercel's selected runtime before adopting version-specific features.
