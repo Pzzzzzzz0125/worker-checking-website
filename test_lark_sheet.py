@@ -95,6 +95,37 @@ class LarkSheetTests(unittest.TestCase):
 
     @patch("api._lark_sheet.lark_api")
     @patch("api._lark_sheet.tenant_access_token", return_value="token")
+    def test_value_ranges_use_sheet_title_not_internal_sheet_id(
+        self,
+        _token,
+        mocked_api,
+    ):
+        workbook = LarkWorkbook("spreadsheet")
+        workbook._sheet_titles_by_id = {"88348e": "2026-01 · 01-15"}
+
+        workbook.write_cells([("88348e", "A1", "Worker")])
+        workbook.write_range("88348e", "A1:B2", [["Worker", "01/01"]])
+        workbook.style_range("88348e", "A1:B1", {"font": {"bold": True}})
+
+        ranges = [
+            call.kwargs["body"]["valueRanges"][0]["range"]
+            if "valueRanges" in call.kwargs["body"]
+            else call.kwargs["body"]["valueRange"]["range"]
+            if "valueRange" in call.kwargs["body"]
+            else call.kwargs["body"]["appendStyle"]["range"]
+            for call in mocked_api.call_args_list
+        ]
+        self.assertEqual(
+            ranges,
+            [
+                "'2026-01 · 01-15'!A1",
+                "'2026-01 · 01-15'!A1:B2",
+                "'2026-01 · 01-15'!A1:B1",
+            ],
+        )
+
+    @patch("api._lark_sheet.lark_api")
+    @patch("api._lark_sheet.tenant_access_token", return_value="token")
     def test_readable_layout_widens_columns_and_rows(
         self,
         _token,

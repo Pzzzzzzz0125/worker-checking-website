@@ -170,6 +170,12 @@ class LarkWorkbook:
         self.token = tenant_access_token()
         self.spreadsheet_token = spreadsheet_token.strip()
         self.url = url.strip()
+        # Lark's sheet metadata exposes both a human-readable title and an
+        # internal sheetId.  The dimension APIs use sheetId, but A1 ranges
+        # (values/style APIs) use the sheet title.  Keep the reverse mapping
+        # from the most recent metadata response so cell writes do not issue
+        # a metadata request for every cell.
+        self._sheet_titles_by_id: dict[str, str] = {}
         if not self.spreadsheet_token:
             raise LarkAPIError("The Lark work-schedule spreadsheet token is missing.")
 
@@ -208,11 +214,35 @@ class LarkWorkbook:
         ).get("data") or {}
 
     def sheets(self) -> dict[str, str]:
-        return {
+        sheets = {
             str(item.get("title") or ""): _sheet_id(item)
             for item in self.metadata().get("sheets") or []
             if item.get("title") and _sheet_id(item)
         }
+        self._sheet_titles_by_id = {
+            sheet_id: title for title, sheet_id in sheets.items()
+        }
+        return sheets
+
+    def _a1_sheet_name(self, sheet_id: str) -> str:
+        """Return the sheet title formatted for an A1 range.
+
+        Spreadsheet value/style endpoints reject internal sheet IDs in A1
+        ranges (for example ``88348e!A1``).  Titles containing spaces or
+        punctuation must be quoted according to A1 notation.  Keep a
+        defensive ID fallback for older workbooks whose metadata is missing.
+        """
+        title = self._sheet_titles_by_id.get(str(sheet_id))
+        if title is None:
+            # This is normally populated by ensure_periods()/sheets().  The
+            # fallback makes direct method calls safe and only costs one
+            # metadata request when the cache has not been populated yet.
+            self.sheets()
+            title = self._sheet_titles_by_id.get(str(sheet_id))
+        if title is None:
+            return str(sheet_id)
+        escaped = title.replace("'", "''")
+        return f"'{escaped}'"
 
     def _update_sheets(self, requests: list[dict]) -> None:
         if not requests:
@@ -292,6 +322,7 @@ class LarkWorkbook:
         return {period.key: current[period.title] for period in periods}
 
     def write_range(self, sheet_id: str, cell_range: str, values: list[list[Any]]) -> None:
+        range_sheet = self._a1_sheet_name(sheet_id)
         lark_api(
             "PUT",
             (
@@ -301,7 +332,7 @@ class LarkWorkbook:
             token=self.token,
             body={
                 "valueRange": {
-                    "range": f"{sheet_id}!{cell_range}",
+                    "range": f"{range_sheet}!{cell_range}",
                     "values": values,
                 }
             },
@@ -311,7 +342,10 @@ class LarkWorkbook:
         if not cells:
             return
         value_ranges = [
-            {"range": f"{sheet_id}!{cell}", "values": [[value]]}
+            {
+                "range": f"{self._a1_sheet_name(sheet_id)}!{cell}",
+                "values": [[value]],
+            }
             for sheet_id, cell, value in cells
         ]
         for offset in range(0, len(value_ranges), 100):
@@ -326,6 +360,7 @@ class LarkWorkbook:
             )
 
     def style_range(self, sheet_id: str, cell_range: str, style: dict) -> None:
+        range_sheet = self._a1_sheet_name(sheet_id)
         lark_api(
             "PUT",
             (
@@ -335,7 +370,7 @@ class LarkWorkbook:
             token=self.token,
             body={
                 "appendStyle": {
-                    "range": f"{sheet_id}!{cell_range}",
+                    "range": f"{range_sheet}!{cell_range}",
                     "style": style,
                 }
             },

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 import re
 
 from api._lark import LarkAPIError
-from api._lark_base import LarkBase
+from api._lark_base import LarkBase, text_value
 from api._lark_sheet import (
     WORKBOOK_SETTING,
     configured_workbook,
@@ -16,6 +17,77 @@ from api._work_log import WORK_LOG_TABLE, work_log_row
 
 WORK_RECORD_TABLES = {"Work Days", "Location Entries"}
 _LOCATION_DAY_KEY = re.compile(r"^(.*\|\d{4}-\d{2}-\d{2})(?:\|.*)?$")
+
+
+def _number_field(value, table_name: str, field_name: str):
+    """Convert numeric mirror fields before sending them to Lark Base.
+
+    PostgreSQL imports and browser edits can leave a numeric value as a
+    string. Lark's Base API reports the unhelpful ``NumberFieldConvFail`` for
+    those values, so validate it here and identify the actual field.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise LarkAPIError(
+            f"{table_name}.{field_name} must be a number, got boolean.",
+            status=422,
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise LarkAPIError(
+            f"{table_name}.{field_name} must be a number, got {value!r}.",
+            status=422,
+        ) from error
+    if not math.isfinite(number):
+        raise LarkAPIError(
+            f"{table_name}.{field_name} must be finite, got {value!r}.",
+            status=422,
+        )
+    return int(number) if number.is_integer() else number
+
+
+def _checkbox_field(value, table_name: str, field_name: str):
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    normalized = str(value).strip().casefold()
+    if normalized in {"true", "yes", "y", "1", "on"}:
+        return True
+    if normalized in {"false", "no", "n", "0", "off"}:
+        return False
+    raise LarkAPIError(
+        f"{table_name}.{field_name} must be a checkbox value, got {value!r}.",
+        status=422,
+    )
+
+
+def normalize_mirror_fields(table_name: str, fields: dict) -> dict:
+    """Normalize fields whose Lark types are stricter than PostgreSQL JSON."""
+    normalized = dict(fields or {})
+    if table_name != "Cost Centers":
+        return normalized
+
+    for field_name in ("Cost Center ID", "Name"):
+        if field_name in normalized and normalized[field_name] is not None:
+            normalized[field_name] = text_value(normalized[field_name])
+
+    display_order = _number_field(
+        normalized.get("Display Order"), table_name, "Display Order"
+    )
+    if display_order is None:
+        normalized.pop("Display Order", None)
+    else:
+        normalized["Display Order"] = display_order
+
+    active = _checkbox_field(normalized.get("Active"), table_name, "Active")
+    if active is None:
+        normalized.pop("Active", None)
+    else:
+        normalized["Active"] = active
+    return normalized
 
 
 def latest_events(events: list[dict]) -> dict[tuple[str, str], dict]:
@@ -46,7 +118,10 @@ def _sync_direct_table(
     if table_name not in KEY_FIELDS:
         raise LarkAPIError(f"Unsupported mirror table {table_name!r}.")
     table_desired = [
-        event
+        {
+            **event,
+            "fields": normalize_mirror_fields(table_name, event.get("fields") or {}),
+        }
         for (event_table, _), event in desired.items()
         if event_table == table_name
     ]

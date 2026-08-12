@@ -2,7 +2,11 @@ import os
 import unittest
 from unittest.mock import patch
 
-from api._lark_sync import latest_events, synchronize_lark
+from api._lark_sync import (
+    latest_events,
+    normalize_mirror_fields,
+    synchronize_lark,
+)
 
 
 class FakeDatabase:
@@ -97,6 +101,34 @@ def work_event(identifier, table_name, key, fields=None, operation="upsert"):
 
 
 class LarkSyncTests(unittest.TestCase):
+    def test_cost_center_fields_are_normalized_for_lark_types(self):
+        self.assertEqual(
+            normalize_mirror_fields(
+                "Cost Centers",
+                {
+                    "Cost Center ID": "21-13-0010",
+                    "Name": "Framing",
+                    "Active": "true",
+                    "Display Order": "4",
+                },
+            ),
+            {
+                "Cost Center ID": "21-13-0010",
+                "Name": "Framing",
+                "Active": True,
+                "Display Order": 4,
+            },
+        )
+
+    def test_invalid_cost_center_number_identifies_the_field(self):
+        with self.assertRaisesRegex(
+            Exception, r"Cost Centers\.Display Order must be a number"
+        ):
+            normalize_mirror_fields(
+                "Cost Centers",
+                {"Cost Center ID": "21-13-0010", "Display Order": "n/a"},
+            )
+
     def test_latest_event_wins_for_the_same_key(self):
         output = latest_events([event(1, "7", name="Old"), event(2, "7", name="New")])
         self.assertEqual(output[("Workers", "7")]["fields"]["Name"], "New")
