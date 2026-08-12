@@ -95,13 +95,12 @@ class LarkSheetTests(unittest.TestCase):
 
     @patch("api._lark_sheet.lark_api")
     @patch("api._lark_sheet.tenant_access_token", return_value="token")
-    def test_value_ranges_use_sheet_title_not_internal_sheet_id(
+    def test_value_ranges_use_sheet_id_and_explicit_single_cell_range(
         self,
         _token,
         mocked_api,
     ):
         workbook = LarkWorkbook("spreadsheet")
-        workbook._sheet_titles_by_id = {"88348e": "2026-01 · 01-15"}
 
         workbook.write_cells([("88348e", "A1", "Worker")])
         workbook.write_range("88348e", "A1:B2", [["Worker", "01/01"]])
@@ -118,9 +117,9 @@ class LarkSheetTests(unittest.TestCase):
         self.assertEqual(
             ranges,
             [
-                "'2026-01 · 01-15'!A1",
-                "'2026-01 · 01-15'!A1:B2",
-                "'2026-01 · 01-15'!A1:B1",
+                "88348e!A1:A1",
+                "88348e!A1:B2",
+                "88348e!A1:B1",
             ],
         )
 
