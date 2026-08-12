@@ -310,6 +310,79 @@ def access_snapshot(current_session: dict) -> dict:
     }
 
 
+def schedule_notification_recipients(current_open_id: str = "") -> list[dict]:
+    """Return users who may receive schedule-conflict notifications.
+
+    Super administrators are marked as required recipients. Schedule managers
+    remain optional and can be selected by the person submitting the plan.
+    Environment bootstrap administrators are included even when their stored
+    database role has not yet been updated.
+    """
+    ensure_permission_schema()
+    configured_admins = admin_ids()
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT open_id, display_name, role
+                    FROM workforce_app_users
+                    WHERE role IN ('schedule_manager', 'super_admin')
+                       OR open_id = ANY(%s::text[])
+                    ORDER BY LOWER(display_name), open_id
+                    """,
+                    (list(configured_admins),),
+                )
+                rows = cursor.fetchall()
+    except LarkAPIError:
+        raise
+    except Exception as error:
+        raise LarkAPIError(
+            f"Could not load schedule notification recipients: {type(error).__name__}.",
+            status=503,
+        ) from error
+
+    recipients: dict[str, dict] = {}
+    for open_id, display_name, stored_role in rows:
+        recipient_id = str(open_id or "").strip()
+        if not recipient_id:
+            continue
+        role = "super_admin" if recipient_id in configured_admins else str(stored_role)
+        recipients[recipient_id] = {
+            "open_id": recipient_id,
+            "name": str(display_name or "").strip() or "Unnamed Lark user",
+            "role": role,
+            "role_label": ROLE_LABELS.get(role, role),
+            "required": role == "super_admin",
+            "current": recipient_id == current_open_id,
+        }
+
+    # A configured administrator may not have signed in since the permission
+    # table was introduced. Keep the ID available so conflicts still attempt
+    # to notify every bootstrap administrator.
+    for recipient_id in configured_admins:
+        recipients.setdefault(
+            recipient_id,
+            {
+                "open_id": recipient_id,
+                "name": "Configured administrator",
+                "role": "super_admin",
+                "role_label": ROLE_LABELS["super_admin"],
+                "required": True,
+                "current": recipient_id == current_open_id,
+            },
+        )
+
+    return sorted(
+        recipients.values(),
+        key=lambda item: (
+            not item["required"],
+            item["name"].casefold(),
+            item["open_id"],
+        ),
+    )
+
+
 def submit_request(current_session: dict, requested_role: str, reason: str) -> dict:
     ensure_permission_schema()
     current_user = register_user(current_session)

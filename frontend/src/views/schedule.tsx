@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, CalendarClock, Check, ChevronLeft, ChevronRight, Edit3, LoaderCircle, Plus, RotateCcw, X } from "lucide-react"
+import { AlertTriangle, Bell, CalendarClock, Check, ChevronLeft, ChevronRight, Edit3, LoaderCircle, Plus, RotateCcw, X } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,6 +38,25 @@ type FormState = {
   start_time: string
   end_time: string
   notes: string
+  notification_recipient_ids: string[]
+}
+
+type NotificationRecipient = {
+  open_id: string
+  name: string
+  role: "schedule_manager" | "super_admin" | string
+  role_label: string
+  required: boolean
+  current: boolean
+}
+
+type NotificationResult = {
+  attempted: number
+  sent: number
+  failed: number
+  recipients: string[]
+  warning?: string
+  errors?: { name?: string; code?: number | null; error: string }[] | string[]
 }
 
 function monday(value: string) {
@@ -54,7 +73,7 @@ function shift(value: string, days: number) {
 }
 
 function emptyForm(date: string): FormState {
-  return { schedule_key: "", schedule_date: date, schedule_end_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "" }
+  return { schedule_key: "", schedule_date: date, schedule_end_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "", notification_recipient_ids: [] }
 }
 
 function scheduleDays(start: string, end: string) {
@@ -129,6 +148,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [saving, setSaving] = useState(false)
   const [reviewing, setReviewing] = useState<string | null>(null)
   const [search, setSearch] = useState("")
+  const [notificationRecipients, setNotificationRecipients] = useState<NotificationRecipient[]>([])
 
   const weekEnd = shift(weekStart, 6)
   const workers = useMemo(() => bootstrap.workers.filter(worker => worker.active !== 0), [bootstrap.workers])
@@ -140,8 +160,15 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const load = async () => {
     setLoading(true)
     try {
-      const result = await api<{ rows: ScheduleRow[] }>(`/api/schedule?from=${weekStart}&to=${weekEnd}`)
+      const result = await api<{ rows: ScheduleRow[]; notification_recipients?: NotificationRecipient[] }>(`/api/schedule?from=${weekStart}&to=${weekEnd}`)
       setRows(result.rows || [])
+      const recipients = result.notification_recipients || []
+      setNotificationRecipients(recipients)
+      const optionalIds = new Set(recipients.filter(item => !item.required).map(item => item.open_id))
+      setForm(current => ({
+        ...current,
+        notification_recipient_ids: current.notification_recipient_ids.filter(id => optionalIds.has(id)),
+      }))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
@@ -168,6 +195,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     start_time: row.start_time,
     end_time: row.end_time,
     notes: row.notes,
+    notification_recipient_ids: [],
   })
 
   const editRow = (row: ScheduleRow) => {
@@ -198,9 +226,21 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
         toast.error("Choose at least one date and no more than 31 dates.")
         return
       }
-      const result = await postJSON<{ schedule: ScheduleRow; schedules?: ScheduleRow[]; submitted_for_approval: boolean; conflicts?: { schedule_date: string; reason: string }[] }>("/api/schedule", { action: "save", ...form, schedule_dates: dates, schedule_end_date: dates[dates.length - 1] })
+      const result = await postJSON<{ schedule: ScheduleRow; schedules?: ScheduleRow[]; submitted_for_approval: boolean; conflicts?: { schedule_date: string; reason: string }[]; notification?: NotificationResult }>("/api/schedule", { action: "save", ...form, schedule_dates: dates, schedule_end_date: dates[dates.length - 1] })
       const savedCount = result.schedules?.length || 1
       toast.success(result.submitted_for_approval ? `${savedCount} schedule${savedCount === 1 ? "" : "s"} saved; conflicts need approval.` : `${savedCount} schedule${savedCount === 1 ? "" : "s"} confirmed.`)
+      if (result.submitted_for_approval && result.notification) {
+        const notice = result.notification
+        if (notice.sent > 0 && notice.failed === 0) {
+          toast.success(`Lark approval notice sent to ${notice.sent} recipient${notice.sent === 1 ? "" : "s"}.`)
+        } else if (notice.sent > 0) {
+          toast.warning(`Lark notice sent to ${notice.sent}; ${notice.failed} recipient${notice.failed === 1 ? "" : "s"} failed.`)
+        } else {
+          const firstError = notice.errors?.[0]
+          const detail = typeof firstError === "string" ? firstError : firstError?.error
+          toast.error(`Conflict saved, but the Lark notice was not sent.${detail ? ` ${detail}` : notice.warning ? ` ${notice.warning}` : ""}`)
+        }
+      }
       setWeekStart(monday(dates[0]))
       resetForm()
       await load()
@@ -248,6 +288,14 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     cost_code_ids: current.cost_code_ids.includes(id)
       ? current.cost_code_ids.filter(value => value !== id)
       : [...current.cost_code_ids, id],
+  }))
+  const requiredRecipients = notificationRecipients.filter(item => item.required)
+  const optionalManagers = notificationRecipients.filter(item => !item.required)
+  const toggleNotificationRecipient = (openId: string) => setForm(current => ({
+    ...current,
+    notification_recipient_ids: current.notification_recipient_ids.includes(openId)
+      ? current.notification_recipient_ids.filter(value => value !== openId)
+      : [...current.notification_recipient_ids, openId],
   }))
   const toggleDate = (value: string) => setSelectedDates(current => current.includes(value)
     ? current.filter(date => date !== value)
@@ -330,6 +378,17 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
           <label className="field-label">Work task<Input value={form.task} onChange={event => setField("task", event.target.value)} placeholder="e.g. Framing, cleanup, inspection" required /></label>
           <label className="field-label">Start time<Input type="time" value={form.start_time} onChange={event => setField("start_time", event.target.value)} /></label>
           <label className="field-label">End time<Input type="time" value={form.end_time} onChange={event => setField("end_time", event.target.value)} /></label>
+        </div>
+        <div className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><div className="flex items-center gap-2 text-sm font-bold text-slate-950"><Bell className="size-4 text-blue-700" />Conflict notification</div><p className="mt-1 text-xs text-muted-foreground">If this plan conflicts, every Super Admin receives a Lark message. Select additional Schedule Managers who should also review it.</p></div>
+            {optionalManagers.length > 0 && <div className="flex gap-2"><button type="button" className="text-xs font-semibold text-blue-700 underline" onClick={() => setForm(current => ({ ...current, notification_recipient_ids: optionalManagers.map(item => item.open_id) }))}>Select all managers</button><button type="button" className="text-xs font-semibold text-slate-600 underline" onClick={() => setForm(current => ({ ...current, notification_recipient_ids: [] }))}>Clear managers</button></div>}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {requiredRecipients.map(recipient => <label key={recipient.open_id} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs"><input type="checkbox" checked disabled /><span className="min-w-0"><strong className="block truncate">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Super Admin · always notified</span></span></label>)}
+            {optionalManagers.map(recipient => <label key={recipient.open_id} className="flex cursor-pointer items-center gap-2 rounded-lg border bg-white px-3 py-2 text-xs hover:border-blue-300 hover:bg-blue-50"><input type="checkbox" checked={form.notification_recipient_ids.includes(recipient.open_id)} onChange={() => toggleNotificationRecipient(recipient.open_id)} /><span className="min-w-0"><strong className="block truncate">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Schedule Manager</span></span></label>)}
+            {!notificationRecipients.length && <p className="text-xs text-amber-700">No eligible Lark recipients are registered. Ask administrators and managers to sign in once.</p>}
+          </div>
         </div>
         <label className="field-label">Notes<Textarea value={form.notes} onChange={event => setField("notes", event.target.value)} placeholder="Optional planning notes" /></label>
         <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="ghost" onClick={resetForm}>Clear</Button><Button type="submit" disabled={saving}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : form.schedule_key ? <Edit3 className="size-4" /> : <Plus className="size-4" />}{saving ? "Saving…" : form.schedule_key ? "Save changes" : "Add schedule"}</Button></div>

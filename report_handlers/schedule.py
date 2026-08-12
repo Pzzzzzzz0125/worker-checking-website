@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from api._data_store import DataStore
-from api._lark import LarkAPIError
+from api._lark import LarkAPIError, lark_api, tenant_access_token
 from api._lark_base import bool_value, field, text_value
-from api._permissions import require_role
+from api._permissions import require_role, schedule_notification_recipients
 from api._postgres_base import PostgresBase
 from api._shared import cookie_value, json_response, verify_payload
 
@@ -220,6 +221,148 @@ def _selected_dates(body: dict) -> list[str]:
     ]
 
 
+def _notification_targets(body: dict, available: list[dict]) -> list[dict]:
+    """Always include admins and validate user-selected schedule managers."""
+    supplied = body.get("notification_recipient_ids", [])
+    if supplied is None:
+        supplied = []
+    if not isinstance(supplied, list):
+        raise ValueError("Notification recipients must be a list.")
+    selected = {
+        _clean(value, 160)
+        for value in supplied
+        if _clean(value, 160)
+    }
+    if len(selected) > 50:
+        raise ValueError("Choose 50 notification recipients or fewer.")
+    by_id = {
+        str(recipient.get("open_id") or ""): recipient
+        for recipient in available
+        if recipient.get("open_id")
+    }
+    invalid = sorted(selected - by_id.keys())
+    if invalid:
+        raise ValueError(
+            "One selected notification manager is no longer eligible. Refresh and choose again."
+        )
+    return [
+        recipient
+        for recipient_id, recipient in by_id.items()
+        if recipient.get("required") or recipient_id in selected
+    ]
+
+
+def _schedule_link() -> str:
+    configured = os.environ.get("APP_URL", "").strip().rstrip("/")
+    if configured:
+        return f"{configured}/#schedule"
+    production = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip().rstrip("/")
+    if production:
+        if not production.startswith("http"):
+            production = f"https://{production}"
+        return f"{production}/#schedule"
+    return "https://workforce-app-theta.vercel.app/#schedule"
+
+
+def _conflict_message(
+    schedules: list[dict],
+    conflicts: list[dict],
+    submitted_by: str,
+) -> str:
+    dates = {item["schedule_date"] for item in conflicts}
+    affected = [row for row in schedules if row["schedule_date"] in dates]
+    first = affected[0] if affected else schedules[0]
+    conflict_lines = [
+        f"- {item['schedule_date']}: {item['reason']}"
+        for item in conflicts[:12]
+    ]
+    if len(conflicts) > 12:
+        conflict_lines.append(f"- …and {len(conflicts) - 12} more conflict(s)")
+    return "\n".join(
+        [
+            "Schedule conflict needs approval",
+            f"Worker: {first['worker_name']}",
+            f"Site: {first['site']}",
+            f"Task: {first['task']}",
+            f"Cost Codes: {', '.join(first['cost_code_names']) or '—'}",
+            (
+                f"Time: {first['start_time']}–{first['end_time']}"
+                if first["start_time"] and first["end_time"]
+                else "Time: not set"
+            ),
+            f"Submitted by: {submitted_by or 'Unknown user'}",
+            "Conflicts:",
+            *conflict_lines,
+            f"Review: {_schedule_link()}",
+        ]
+    )
+
+
+def _notify_conflicts(
+    recipients: list[dict],
+    schedules: list[dict],
+    conflicts: list[dict],
+    submitted_by: str,
+) -> dict:
+    """Best-effort notification; persisted schedules remain authoritative."""
+    if not conflicts:
+        return {"attempted": 0, "sent": 0, "failed": 0, "recipients": []}
+    message = _conflict_message(schedules, conflicts, submitted_by)
+    attempted = len(recipients)
+    if not recipients:
+        return {
+            "attempted": 0,
+            "sent": 0,
+            "failed": 0,
+            "recipients": [],
+            "warning": "No administrator or manager is available for Lark notification.",
+        }
+    try:
+        token = tenant_access_token()
+    except LarkAPIError as error:
+        return {
+            "attempted": attempted,
+            "sent": 0,
+            "failed": attempted,
+            "recipients": [],
+            "errors": [str(error)],
+        }
+
+    sent_names = []
+    errors = []
+    for recipient in recipients:
+        try:
+            lark_api(
+                "POST",
+                "/im/v1/messages",
+                token=token,
+                query={"receive_id_type": "open_id"},
+                body={
+                    "receive_id": recipient["open_id"],
+                    "msg_type": "text",
+                    "content": json.dumps(
+                        {"text": message}, ensure_ascii=False
+                    ),
+                },
+            )
+            sent_names.append(recipient["name"])
+        except LarkAPIError as error:
+            errors.append(
+                {
+                    "name": recipient["name"],
+                    "code": error.code,
+                    "error": str(error),
+                }
+            )
+    return {
+        "attempted": attempted,
+        "sent": len(sent_names),
+        "failed": len(errors),
+        "recipients": sent_names,
+        "errors": errors,
+    }
+
+
 def _save(base, body: dict, session: dict) -> dict:
     workers = _workers(base)
     worker_key = _clean(body.get("worker_key"), 160)
@@ -267,7 +410,6 @@ def _save(base, body: dict, session: dict) -> dict:
         )
         planned_rows.append(_row({"record_id": candidate["record_id"], "fields": fields}))
         plans.append((fields, candidate, conflict))
-    saved_results = [base.set_by_key(TABLE, KEY_FIELD, fields[KEY_FIELD], fields) for fields, _, _ in plans]
     stored_rows = [
         _row({"record_id": candidate.get("record_id", ""), "fields": fields})
         for fields, candidate, _ in plans
@@ -277,6 +419,22 @@ def _save(base, body: dict, session: dict) -> dict:
         for row, (_, _, conflict) in zip(stored_rows, plans)
         if conflict
     ]
+    available_recipients = schedule_notification_recipients(
+        _clean(session.get("sub"), 160)
+    )
+    notification_targets = (
+        _notification_targets(body, available_recipients) if conflicts else []
+    )
+    saved_results = [
+        base.set_by_key(TABLE, KEY_FIELD, fields[KEY_FIELD], fields)
+        for fields, _, _ in plans
+    ]
+    notification = _notify_conflicts(
+        notification_targets,
+        stored_rows,
+        conflicts,
+        _clean(session.get("name"), 160),
+    )
     return {
         "schedule": stored_rows[0],
         "schedules": stored_rows,
@@ -284,6 +442,7 @@ def _save(base, body: dict, session: dict) -> dict:
         "conflicts": conflicts,
         "created": bool(saved_results[0].get("created", False)),
         "created_count": sum(bool(result.get("created", False)) for result in saved_results),
+        "notification": notification,
     }
 
 
@@ -379,6 +538,9 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {
                 "from": start, "to": end, "rows": rows,
                 "pending_count": sum(row["status"] == "pending_approval" for row in rows),
+                "notification_recipients": schedule_notification_recipients(
+                    _clean(session.get("sub"), 160)
+                ),
             })
         except (ValueError, TypeError) as error:
             json_response(self, {"error": str(error)}, 400)

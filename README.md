@@ -436,10 +436,16 @@ records. Only Schedule Managers and Super Admins can open this page.
 4. An overlapping assignment for the same worker at another Site becomes
    **Needs approval**. The conflict and submitting identity are retained rather
    than silently confirming both assignments.
-5. A Schedule Manager can approve or reject pending rows. Edit updates a row;
+5. The form always includes every Super Admin as a required Lark recipient and
+   lets the submitter select additional Schedule Managers. When a conflict is
+   saved, one summarized Lark Bot message is sent with the worker, Site, task,
+   Cost Codes, time, conflict details, submitter, and Schedule review link.
+   Delivery is best-effort: the pending record remains saved if messaging
+   fails, and the UI reports the sent and failed counts.
+6. A Schedule Manager can approve or reject pending rows. Edit updates a row;
    Cancel retains it with Cancelled status. Reviewer identity remains available
    for accountability.
-6. Weekly assignments can be searched by worker, Site, Cost Code, task, or
+7. Weekly assignments can be searched by worker, Site, Cost Code, task, or
    status.
 
 Schedule and Entry are intentionally separate. Schedule rows do not create Work
@@ -857,6 +863,11 @@ request `Entry user` or `Schedule manager`. The request appears in the Super
 Admin queue, and the app attempts a Lark direct message to every Super Admin.
 Super Admin approval changes the role immediately. If the Lark Bot send scope
 is unavailable, the request remains safe in the in-app queue.
+
+Schedule conflicts use the same Bot API. Super Admins are mandatory recipients;
+the submitting user may select additional Schedule Managers. Only registered
+users whose current role can approve conflicts appear in that list, and the
+backend validates every selected Open ID before sending.
 
 The four hierarchical roles are:
 

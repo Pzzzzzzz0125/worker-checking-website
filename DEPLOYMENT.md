@@ -192,11 +192,12 @@ of truth. In Site Management, future XLSX/CSV libraries can be merged or used
 to replace the active library. Import -> **Extract Sites for review** finds
 legacy Entry names and creates archived/unverified records for manual cleanup.
 
-For direct Lark access-request notifications, enable the app's bot capability
-and the Lark permission that allows the app to send messages as the bot. The
-recipient must be in the app's available user scope. If that permission is not
-published or a recipient cannot receive bot messages, the request is still
-stored and visible in Settings.
+For direct Lark access-request and Schedule-conflict notifications, enable the
+app's bot capability and grant either `im:message:send_as_bot` (send messages as
+the app) or the broader `im:message` scope. Publish a new Lark app version after
+changing capabilities or scopes. Every recipient must be in the app/bot's
+available user scope. If messaging is unavailable, the access request or
+pending Schedule remains stored; the Schedule UI reports the delivery failure.
 
 ### Protected pages
 
