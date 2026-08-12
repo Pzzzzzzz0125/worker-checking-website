@@ -129,6 +129,26 @@ class LarkSyncTests(unittest.TestCase):
                 {"Cost Center ID": "21-13-0010", "Display Order": "n/a"},
             )
 
+    def test_site_iso_timestamp_is_converted_for_lark_date_field(self):
+        fields = normalize_mirror_fields(
+            "Sites",
+            {
+                "Site Key": "site-one",
+                "Name": "850 Villa",
+                "Updated At": "2026-08-09T18:45:26.648690+00:00",
+            },
+        )
+        self.assertEqual(fields["Site Key"], "site-one")
+        self.assertIsInstance(fields["Updated At"], int)
+        self.assertGreater(fields["Updated At"], 1_700_000_000_000)
+
+    def test_empty_optional_datetime_becomes_null_instead_of_invalid_text(self):
+        fields = normalize_mirror_fields(
+            "Schedules",
+            {"Schedule Key": "schedule-one", "Reviewed At": ""},
+        )
+        self.assertIsNone(fields["Reviewed At"])
+
     def test_latest_event_wins_for_the_same_key(self):
         output = latest_events([event(1, "7", name="Old"), event(2, "7", name="New")])
         self.assertEqual(output[("Workers", "7")]["fields"]["Name"], "New")

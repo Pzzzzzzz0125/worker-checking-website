@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, datetime
 import math
+import os
 import re
+from zoneinfo import ZoneInfo
 
 from api._lark import LarkAPIError
 from api._lark_base import LarkBase, text_value
@@ -13,6 +16,7 @@ from api._lark_sheet import (
 )
 from api._postgres_base import KEY_FIELDS, PostgresBase, lark_mirror_enabled
 from api._work_log import WORK_LOG_TABLE, work_log_row
+from api.lark.setup import CHECKBOX, DATE, NUMBER, SCHEMA, TEXT
 
 
 WORK_RECORD_TABLES = {"Work Days", "Location Entries"}
@@ -64,29 +68,79 @@ def _checkbox_field(value, table_name: str, field_name: str):
     )
 
 
+def _datetime_field(value, table_name: str, field_name: str):
+    """Convert PostgreSQL dates/ISO timestamps to Lark millisecond timestamps."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise LarkAPIError(
+            f"{table_name}.{field_name} must be a date/time, got boolean.",
+            status=422,
+        )
+
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if not math.isfinite(timestamp):
+            raise LarkAPIError(
+                f"{table_name}.{field_name} must be a finite timestamp.",
+                status=422,
+            )
+        # Accept both seconds and milliseconds from historical imports.
+        if abs(timestamp) < 100_000_000_000:
+            timestamp *= 1000
+        return int(round(timestamp))
+
+    raw = str(value).strip()
+    try:
+        numeric = float(raw)
+    except ValueError:
+        numeric = None
+    if numeric is not None:
+        return _datetime_field(numeric, table_name, field_name)
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(raw[:10])
+        except ValueError as error:
+            raise LarkAPIError(
+                f"{table_name}.{field_name} must be an ISO date/time, got {value!r}.",
+                status=422,
+            ) from error
+        parsed = datetime.combine(parsed_date, datetime.min.time())
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=ZoneInfo(
+                os.environ.get("APP_TIME_ZONE", "America/Los_Angeles")
+            )
+        )
+    return int(round(parsed.timestamp() * 1000))
+
+
 def normalize_mirror_fields(table_name: str, fields: dict) -> dict:
     """Normalize fields whose Lark types are stricter than PostgreSQL JSON."""
     normalized = dict(fields or {})
-    if table_name != "Cost Centers":
-        return normalized
-
-    for field_name in ("Cost Center ID", "Name"):
-        if field_name in normalized and normalized[field_name] is not None:
-            normalized[field_name] = text_value(normalized[field_name])
-
-    display_order = _number_field(
-        normalized.get("Display Order"), table_name, "Display Order"
-    )
-    if display_order is None:
-        normalized.pop("Display Order", None)
-    else:
-        normalized["Display Order"] = display_order
-
-    active = _checkbox_field(normalized.get("Active"), table_name, "Active")
-    if active is None:
-        normalized.pop("Active", None)
-    else:
-        normalized["Active"] = active
+    field_types = dict(SCHEMA.get(table_name, ()))
+    for field_name, field_type in field_types.items():
+        if field_name not in normalized:
+            continue
+        value = normalized[field_name]
+        if field_type == NUMBER:
+            normalized[field_name] = _number_field(
+                value, table_name, field_name
+            )
+        elif field_type == CHECKBOX:
+            normalized[field_name] = _checkbox_field(
+                value, table_name, field_name
+            )
+        elif field_type == DATE:
+            normalized[field_name] = _datetime_field(
+                value, table_name, field_name
+            )
+        elif field_type == TEXT and value is not None:
+            normalized[field_name] = text_value(value)
     return normalized
 
 
@@ -200,7 +254,10 @@ def _sync_work_log(
         database.delete_mirror_keys(WORK_LOG_TABLE, missing_day_keys)
 
     desired_rows = {
-        key: work_log_row(day, locations_by_day.get(key, []))
+        key: normalize_mirror_fields(
+            WORK_LOG_TABLE,
+            work_log_row(day, locations_by_day.get(key, [])),
+        )
         for key, day in days_by_key.items()
     }
     updates = [
