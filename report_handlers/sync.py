@@ -25,12 +25,17 @@ class handler(BaseHTTPRequestHandler):
         if not current:
             return
         try:
-            details = parse_qs(urlparse(self.path).query).get("details", [""])[0]
+            query = parse_qs(urlparse(self.path).query)
+            details = query.get("details", [""])[0]
+            error_table = query.get("table", [""])[0].strip()
             include_errors = details in {"1", "true", "yes"}
             if include_errors and current.get("sub") not in admin_ids():
                 json_response(self, {"error": "Only a configured Lark administrator can view sync errors."}, 403)
                 return
-            result = PostgresBase().sync_status(include_errors=include_errors)
+            result = PostgresBase().sync_status(
+                include_errors=include_errors,
+                error_table=error_table if include_errors else "",
+            )
             if not result["enabled"]:
                 result["message"] = "Lark mirroring is disabled; the queue is preserved but not processed."
             json_response(self, result)

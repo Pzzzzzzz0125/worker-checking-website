@@ -861,7 +861,12 @@ class PostgresBase:
                 status=503,
             ) from queue_error
 
-    def sync_status(self, *, include_errors: bool = False) -> dict:
+    def sync_status(
+        self,
+        *,
+        include_errors: bool = False,
+        error_table: str = "",
+    ) -> dict:
         try:
             with _connection() as connection:
                 with connection.cursor() as cursor:
@@ -891,9 +896,11 @@ class PostgresBase:
                                    last_error, created_at, available_at
                             FROM workforce_sync_outbox
                             WHERE last_error IS NOT NULL
-                            ORDER BY id DESC
+                              AND (%s = '' OR table_name = %s)
+                            ORDER BY available_at DESC, id DESC
                             LIMIT 25
-                            """
+                            """,
+                            (error_table, error_table),
                         )
                         error_samples = [
                             {
