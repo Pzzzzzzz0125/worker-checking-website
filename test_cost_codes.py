@@ -60,6 +60,23 @@ class CostCodeSourceTests(unittest.TestCase):
             token="tenant-token",
         )
 
+    def test_reads_numeric_and_rich_text_sheet_cells_without_crashing(self):
+        with patch.object(cost_codes, "lark_api", return_value={
+            "data": {"valueRange": {"values": [
+                ["ID", "Name"],
+                [1010, "Numeric code"],
+                [2020.0, [{"text": "Rich"}, {"text": "name"}]],
+                [float("nan"), "Ignored invalid number"],
+            ]}},
+        }):
+            rows = read_sheet_cost_centers({
+                "token": "sht-real", "type": "sheet", "sheet_id": "2IdR2F",
+            }, "tenant-token")
+        self.assertEqual(rows, [
+            {"id": "1010", "name": "Numeric code"},
+            {"id": "2020", "name": "Rich name"},
+        ])
+
     def test_only_new_or_changed_codes_are_written(self):
         existing = [
             {"record_id": "one", "fields": {

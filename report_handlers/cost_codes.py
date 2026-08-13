@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import hmac
+import math
 import os
 import re
+import traceback
 from http.server import BaseHTTPRequestHandler
 from io import BytesIO
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -22,6 +24,41 @@ from xlsx_workbook import normalize_sheet_name, read_cost_centers
 
 TABLE = "Cost Centers"
 KEY_FIELD = "Cost Center ID"
+
+
+def _cell_text(value) -> str:
+    """Convert Lark Sheet scalar/rich-text cells to a stable plain string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return normalize_sheet_name(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return ""
+        return str(int(value)) if value.is_integer() else format(value, "g")
+    if isinstance(value, dict):
+        for key in ("text", "value", "name", "link"):
+            if key in value:
+                text = _cell_text(value.get(key))
+                if text:
+                    return text
+        return ""
+    if isinstance(value, (list, tuple)):
+        return normalize_sheet_name(" ".join(filter(None, (_cell_text(item) for item in value))))
+    return normalize_sheet_name(str(value))
+
+
+def _unexpected_error(handler: BaseHTTPRequestHandler, error: Exception) -> None:
+    # Keep credentials and response payloads out of the browser while preserving
+    # a complete traceback in Vercel Function Logs for administrators.
+    traceback.print_exc()
+    json_response(handler, {
+        "error": f"Cost Code sync failed unexpectedly ({type(error).__name__}). Check Vercel Function Logs.",
+    }, 500)
 
 
 def cost_code_source(value: str | None = None) -> dict:
@@ -84,8 +121,8 @@ def read_sheet_cost_centers(item: dict, token: str) -> list[dict[str, str]]:
         return []
     header = values[0] if isinstance(values[0], list) else []
     if (
-        normalize_sheet_name(header[0] if len(header) > 0 else "").casefold() != "id"
-        or normalize_sheet_name(header[1] if len(header) > 1 else "").casefold() != "name"
+        _cell_text(header[0] if len(header) > 0 else "").casefold() != "id"
+        or _cell_text(header[1] if len(header) > 1 else "").casefold() != "name"
     ):
         return []
     centers: list[dict[str, str]] = []
@@ -93,8 +130,8 @@ def read_sheet_cost_centers(item: dict, token: str) -> list[dict[str, str]]:
     for raw in values[1:]:
         if not isinstance(raw, list):
             continue
-        center_id = normalize_sheet_name(raw[0] if len(raw) > 0 else "")
-        center_name = normalize_sheet_name(raw[1] if len(raw) > 1 else "")
+        center_id = _cell_text(raw[0] if len(raw) > 0 else "")
+        center_name = _cell_text(raw[1] if len(raw) > 1 else "")
         if center_id and center_name and center_id not in seen:
             centers.append({"id": center_id, "name": center_name})
             seen.add(center_id)
@@ -223,6 +260,8 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
+        except Exception as error:  # pragma: no cover - production diagnostic guard
+            _unexpected_error(self, error)
 
     def do_CRON(self) -> None:
         if not cron_authorized(self.headers.get("Authorization", "")):
@@ -234,6 +273,8 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
         except (BadZipFile, ParseError, KeyError, ValueError, OSError) as error:
             json_response(self, {"error": f"Could not read the Cost Code workbook: {error}"}, 422)
+        except Exception as error:  # pragma: no cover - production diagnostic guard
+            _unexpected_error(self, error)
 
     def do_POST(self) -> None:
         session = _admin(self)
@@ -253,3 +294,5 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, {"error": str(error), "lark_code": error.code}, error.status)
         except (BadZipFile, ParseError, KeyError, OSError) as error:
             json_response(self, {"error": f"Could not read the Cost Code workbook: {error}"}, 422)
+        except Exception as error:  # pragma: no cover - production diagnostic guard
+            _unexpected_error(self, error)
