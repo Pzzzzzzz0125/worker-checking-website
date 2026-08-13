@@ -19,6 +19,7 @@ from report_handlers.schedule import handler as ScheduleHandler
 from report_handlers.sites import handler as SitesHandler
 from report_handlers.workbook import handler as WorkbookHandler
 from report_handlers.workers import handler as WorkersHandler, require_payroll_access
+from report_handlers.cost_codes import handler as CostCodeHandler
 
 
 class handler(BaseHTTPRequestHandler):
@@ -26,6 +27,9 @@ class handler(BaseHTTPRequestHandler):
         return parse_qs(urlparse(self.path).query).get("action", [""])[0]
 
     def do_GET(self) -> None:
+        if self.action() == "cost_code_cron":
+            CostCodeHandler.do_CRON(self)
+            return
         actions = {
             "payroll": PayrollHandler,
             "payroll_worker_detail": PayrollWorkerDetailHandler,
@@ -41,6 +45,7 @@ class handler(BaseHTTPRequestHandler):
             "import_access": DataAccessHandler,
             "export_access": DataAccessHandler,
             "settings_access": SettingsHandler,
+            "cost_code_source": CostCodeHandler,
             "schedule": ScheduleHandler,
             "sites_library": SitesHandler,
         }
@@ -77,6 +82,9 @@ class handler(BaseHTTPRequestHandler):
             return
         if self.action() == "settings_access":
             SettingsHandler.do_POST(self)
+            return
+        if self.action() == "cost_code_source":
+            CostCodeHandler.do_POST(self)
             return
         if self.action() == "schedule":
             ScheduleHandler.do_POST(self)

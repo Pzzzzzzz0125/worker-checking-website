@@ -584,6 +584,12 @@ Invoice PDFs render on the server without Microsoft Office or LibreOffice.
 5. A Super Admin can approve/reject requests or directly change a registered
    user's role. The sidebar refreshes after the role changes.
 6. Environment-listed recovery administrators cannot be demoted in the UI.
+7. A Super Admin can click **Sync Cost Codes** to read the separately connected
+   Lark Wiki Sheet, direct Sheet, or Excel file. The sync adds new IDs, updates the name/order for
+   existing IDs, and reactivates matching archived IDs. Codes omitted from the
+   source are retained so historical records are never damaged.
+8. Vercel also runs the same idempotent, read-only-source sync once daily. The
+   Cron route requires `CRON_SECRET`; it cannot be invoked anonymously.
 
 Role changes affect future access, not historical records. Payroll/Site Check,
 Worker/Site Management, Import, and Export have the additional grants shown in

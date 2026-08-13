@@ -3,6 +3,7 @@ import {
   Check,
   ClipboardCopy,
   LoaderCircle,
+  RefreshCw,
   Settings2,
   ShieldCheck,
   UserCheck,
@@ -61,6 +62,19 @@ type AccessSettings = {
   users: AccessUser[]
   notification?: { attempted: number; sent: number; failed: number }
 }
+type CostCodeStatus = {
+  configured: boolean
+  source_type: "wiki" | "sheet" | "file" | ""
+  database_rows: number
+  message?: string
+  counts?: {
+    source_rows: number
+    database_rows: number
+    added: number
+    updated: number
+    unchanged: number
+  }
+}
 
 const roleDetails: Record<Role, string> = {
   viewer: "View authorized workforce information without changing entries.",
@@ -91,17 +105,23 @@ function timeLabel(value: string) {
   }).format(new Date(value))
 }
 
-export function SettingsView() {
+export function SettingsView({ onSaved }: { onSaved?: () => Promise<void> | void }) {
   const [data, setData] = useState<AccessSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [requestedRole, setRequestedRole] = useState<Role>("entry_user")
   const [reason, setReason] = useState("")
+  const [costCodes, setCostCodes] = useState<CostCodeStatus | null>(null)
+  const [syncingCostCodes, setSyncingCostCodes] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      setData(await api<AccessSettings>("/api/settings/access"))
+      const access = await api<AccessSettings>("/api/settings/access")
+      setData(access)
+      if (access.permissions.can_manage_access) {
+        setCostCodes(await api<CostCodeStatus>("/api/settings/cost-codes"))
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
@@ -109,6 +129,23 @@ export function SettingsView() {
     }
   }
   useEffect(() => { void load() }, [])
+
+  const syncCostCodes = async () => {
+    setSyncingCostCodes(true)
+    try {
+      const result = await postJSON<CostCodeStatus>("/api/settings/cost-codes", { action: "sync" })
+      setCostCodes(result)
+      const counts = result.counts
+      toast.success(counts
+        ? `Cost Codes synced: ${counts.added} added, ${counts.updated} updated, ${counts.unchanged} unchanged.`
+        : "Cost Codes synced.")
+      await onSaved?.()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSyncingCostCodes(false)
+    }
+  }
 
   const mutate = async (body: Record<string, unknown>, success: string) => {
     setSaving(true)
@@ -178,6 +215,27 @@ export function SettingsView() {
     </Card>}
 
     {data.permissions.can_manage_access && <>
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>Cost Code source</CardTitle>
+          <CardDescription>The separate read-only Lark source syncs automatically once per day. You can also sync it now.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1 rounded-xl border bg-slate-50 p-3 text-sm">
+            <strong className="block">{costCodes?.configured ? `Connected Lark ${costCodes.source_type === "wiki" ? "Wiki Sheet" : costCodes.source_type === "sheet" ? "Sheet" : "Excel file"}` : "Not connected"}</strong>
+            <span className="text-xs text-muted-foreground">
+              {costCodes?.configured
+                ? `${costCodes.database_rows.toLocaleString()} Cost Codes currently stored in the database.`
+                : costCodes?.message || "Add LARK_COST_CODE_SOURCE_URL in Vercel."}
+            </span>
+          </div>
+          <Button disabled={!costCodes?.configured || syncingCostCodes} onClick={() => void syncCostCodes()}>
+            {syncingCostCodes ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            {syncingCostCodes ? "Syncing…" : "Sync Cost Codes"}
+          </Button>
+        </CardContent>
+      </Card>
+
       <Card className="mt-5">
         <CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>Pending requests</CardTitle><CardDescription>Approve only the access needed for the person's work.</CardDescription></div><Badge variant={data.pending_requests.length ? "warning" : "success"}>{data.pending_requests.length} pending</Badge></div></CardHeader>
         <CardContent>

@@ -217,6 +217,8 @@ valid for up to eight hours unless `SESSION_SECRET` is also rotated.
 | --- | --- | --- |
 | `LARK_BASE_APP_TOKEN` | yes | Base app token from the Base URL |
 | `LARK_DRIVE_FOLDER_TOKEN` | import/export required | folder token from Drive URL |
+| `LARK_COST_CODE_SOURCE_URL` | Cost Code sync | Lark `/wiki/`, `/sheets/`, or `/file/` URL shared with the app's access group |
+| `CRON_SECRET` | daily Cost Code sync | random secret of at least 32 characters; Vercel sends it in the Authorization header |
 | `LARK_WORKBOOK_TOKEN` | optional override | existing connected spreadsheet token |
 | `LARK_MIRROR_ENABLED` | yes for mirror | `true` only after PostgreSQL and Base schemas are ready |
 

@@ -11,6 +11,12 @@
       "includeFiles": "{templates/*.xlsx,data/site-address-library.csv}"
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/cost-codes",
+      "schedule": "0 10 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/payroll",
@@ -47,6 +53,14 @@
     {
       "source": "/api/settings/access",
       "destination": "/api/reports?action=settings_access"
+    },
+    {
+      "source": "/api/settings/cost-codes",
+      "destination": "/api/reports?action=cost_code_source"
+    },
+    {
+      "source": "/api/cron/cost-codes",
+      "destination": "/api/reports?action=cost_code_cron"
     },
     {
       "source": "/api/schedule",
