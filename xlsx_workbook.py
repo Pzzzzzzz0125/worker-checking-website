@@ -239,23 +239,29 @@ def read_workbook(path: str | Path, year: int) -> dict:
 
 
 def read_cost_centers(path: str | Path) -> list[dict[str, str]]:
-    """Read the current cost-code sheet whose B/C headers are ID and Name."""
+    """Read either the labor Cost Code/Description or legacy ID/Name layout."""
     with ZipFile(path) as archive:
         shared = _shared_strings(archive)
         for _sheet_name, sheet_path in workbook_sheets(archive):
             rows = sheet_rows(archive, sheet_path, shared)
             if not rows:
                 continue
-            header = rows[0]
-            if normalize_sheet_name(header.get(2, "")).casefold() != "id":
-                continue
-            if normalize_sheet_name(header.get(3, "")).casefold() != "name":
+            headers = {
+                normalize_sheet_name(value).casefold(): column
+                for column, value in rows[0].items()
+                if normalize_sheet_name(value)
+            }
+            if "cost code" in headers and "description" in headers:
+                id_column, name_column = headers["cost code"], headers["description"]
+            elif "id" in headers and "name" in headers:
+                id_column, name_column = headers["id"], headers["name"]
+            else:
                 continue
             centers = []
             seen = set()
             for row in rows[1:]:
-                center_id = normalize_sheet_name(row.get(2, ""))
-                center_name = normalize_sheet_name(row.get(3, ""))
+                center_id = normalize_sheet_name(row.get(id_column, ""))
+                center_name = normalize_sheet_name(row.get(name_column, ""))
                 if not center_id or not center_name or center_id in seen:
                     continue
                 centers.append({"id": center_id, "name": center_name})

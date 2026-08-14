@@ -72,6 +72,7 @@ type CostCodeStatus = {
     database_rows: number
     added: number
     updated: number
+    deactivated: number
     unchanged: number
   }
 }
@@ -137,7 +138,7 @@ export function SettingsView({ onSaved }: { onSaved?: () => Promise<void> | void
       setCostCodes(result)
       const counts = result.counts
       toast.success(counts
-        ? `Cost Codes synced: ${counts.added} added, ${counts.updated} updated, ${counts.unchanged} unchanged.`
+        ? `Cost Codes synced: ${counts.added} added, ${counts.updated} updated, ${counts.deactivated} old codes archived.`
         : "Cost Codes synced.")
       await onSaved?.()
     } catch (error) {

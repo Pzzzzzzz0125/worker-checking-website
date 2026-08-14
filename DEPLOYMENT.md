@@ -229,6 +229,12 @@ can be removed after confirming the deployed version matches this repository.
 The workbook token normally lives in PostgreSQL `workforce_settings`.
 `LARK_WORKBOOK_TOKEN` is an optional override/recovery value.
 
+The Cost Code source accepts either the current labor-oriented columns
+`Cost Code` / `Description` or the legacy columns `ID` / `Name`. A successful
+sync creates new codes, updates matching codes, and archives database codes
+that are absent from the current source. Archived codes remain available in
+historical work records but are removed from new Entry and Schedule choices.
+
 ### AI
 
 | Variable | Required | Meaning |

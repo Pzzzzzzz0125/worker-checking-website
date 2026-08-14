@@ -1,4 +1,6 @@
 import unittest
+import io
+from pathlib import Path
 from unittest.mock import patch
 
 from report_handlers import cost_codes
@@ -6,6 +8,7 @@ from report_handlers.cost_codes import (
     changed_rows, cost_code_source, cron_authorized, read_sheet_cost_centers,
     resolve_source,
 )
+from xlsx_workbook import fill_template_workbook, read_cost_centers
 
 
 class CostCodeSourceTests(unittest.TestCase):
@@ -46,8 +49,8 @@ class CostCodeSourceTests(unittest.TestCase):
     def test_reads_selected_sheet_columns_b_and_c(self):
         with patch.object(cost_codes, "lark_api", return_value={
             "data": {"valueRange": {"values": [
-                ["ID", "Name"], ["01-01-0010", "General labor"],
-                ["02-02-0020", "Equipment"],
+                ["", "ID", "Name"], ["", "01-01-0010", "General labor"],
+                ["", "02-02-0020", "Equipment"],
             ]}},
         }) as api:
             rows = read_sheet_cost_centers({
@@ -56,9 +59,39 @@ class CostCodeSourceTests(unittest.TestCase):
         self.assertEqual(rows[1], {"id": "02-02-0020", "name": "Equipment"})
         api.assert_called_once_with(
             "GET",
-            "/sheets/v2/spreadsheets/sht-real/values/2IdR2F%21B1%3AC5000",
+            "/sheets/v2/spreadsheets/sht-real/values/2IdR2F%21A1%3AC5000",
             token="tenant-token",
         )
+
+    def test_reads_new_labor_cost_code_sheet_layout(self):
+        with patch.object(cost_codes, "lark_api", return_value={
+            "data": {"valueRange": {"values": [
+                ["Cost Code", "Description", "中文描述"],
+                ["01-56-0010", "Temp Fencing Labor", "临时围栏安装 人工"],
+                ["03-31-0010", "Slab on grade Labor", "板式基础 人工"],
+            ]}},
+        }):
+            rows = read_sheet_cost_centers({
+                "token": "sht-real", "type": "sheet", "sheet_id": "labor",
+            }, "tenant-token")
+        self.assertEqual(rows, [
+            {"id": "01-56-0010", "name": "Temp Fencing Labor"},
+            {"id": "03-31-0010", "name": "Slab on grade Labor"},
+        ])
+
+    def test_exported_workbook_reads_new_labor_layout(self):
+        output = io.BytesIO()
+        fill_template_workbook(
+            Path(__file__).parent / "templates" / "Worker Compensation Auditor Report.xlsx",
+            output,
+            cell_updates={"Sheet1": {
+                "A1": "Cost Code", "B1": "Description",
+                "A2": "06-11-0010", "B2": "Framing Labor",
+            }},
+        )
+        self.assertEqual(read_cost_centers(io.BytesIO(output.getvalue())), [
+            {"id": "06-11-0010", "name": "Framing Labor"},
+        ])
 
     def test_reads_numeric_and_rich_text_sheet_cells_without_crashing(self):
         with patch.object(cost_codes, "lark_api", return_value={
@@ -87,6 +120,10 @@ class CostCodeSourceTests(unittest.TestCase):
                 "Cost Center ID": "02-01", "Name": "Old name", "Active": True,
                 "Display Order": 2,
             }},
+            {"record_id": "old", "fields": {
+                "Cost Center ID": "99-01", "Name": "Outdated code", "Active": True,
+                "Display Order": 99,
+            }},
         ]
         source = [
             {"Cost Center ID": "01-01", "Name": "Labor", "Active": True, "Display Order": 1},
@@ -94,10 +131,11 @@ class CostCodeSourceTests(unittest.TestCase):
             {"Cost Center ID": "03-01", "Name": "Equipment", "Active": True, "Display Order": 3},
         ]
         rows, counts = changed_rows(source, existing)
-        self.assertEqual([row["Cost Center ID"] for row in rows], ["02-01", "03-01"])
+        self.assertEqual([row["Cost Center ID"] for row in rows], ["02-01", "03-01", "99-01"])
+        self.assertFalse(rows[-1]["Active"])
         self.assertEqual(counts, {
-            "source_rows": 3, "database_rows": 2, "added": 1,
-            "updated": 1, "unchanged": 1,
+            "source_rows": 3, "database_rows": 3, "added": 1,
+            "updated": 1, "deactivated": 1, "unchanged": 1,
         })
 
 

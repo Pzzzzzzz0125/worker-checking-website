@@ -109,7 +109,7 @@ def read_sheet_cost_centers(item: dict, token: str) -> list[dict[str, str]]:
     sheet_id = str(item.get("sheet_id") or "").strip()
     if not sheet_id:
         return []
-    cell_range = quote(f"{sheet_id}!B1:C5000", safe="")
+    cell_range = quote(f"{sheet_id}!A1:C5000", safe="")
     spreadsheet_token = quote(str(item.get("token") or ""), safe="")
     payload = lark_api(
         "GET",
@@ -120,18 +120,24 @@ def read_sheet_cost_centers(item: dict, token: str) -> list[dict[str, str]]:
     if not isinstance(values, list) or not values:
         return []
     header = values[0] if isinstance(values[0], list) else []
-    if (
-        _cell_text(header[0] if len(header) > 0 else "").casefold() != "id"
-        or _cell_text(header[1] if len(header) > 1 else "").casefold() != "name"
-    ):
+    columns = {
+        _cell_text(value).casefold(): index
+        for index, value in enumerate(header)
+        if _cell_text(value)
+    }
+    if "cost code" in columns and "description" in columns:
+        id_column, name_column = columns["cost code"], columns["description"]
+    elif "id" in columns and "name" in columns:
+        id_column, name_column = columns["id"], columns["name"]
+    else:
         return []
     centers: list[dict[str, str]] = []
     seen: set[str] = set()
     for raw in values[1:]:
         if not isinstance(raw, list):
             continue
-        center_id = _cell_text(raw[0] if len(raw) > 0 else "")
-        center_name = _cell_text(raw[1] if len(raw) > 1 else "")
+        center_id = _cell_text(raw[id_column] if len(raw) > id_column else "")
+        center_name = _cell_text(raw[name_column] if len(raw) > name_column else "")
         if center_id and center_name and center_id not in seen:
             centers.append({"id": center_id, "name": center_name})
             seen.add(center_id)
@@ -187,9 +193,12 @@ def changed_rows(source_rows: list[dict], existing_records: list[dict]) -> tuple
     }
     additions = 0
     updates = 0
+    deactivated = 0
     changed: list[dict] = []
+    source_keys: set[str] = set()
     for row in source_rows:
         key = text_value(row.get(KEY_FIELD))
+        source_keys.add(key)
         current = existing.get(key)
         if current is None:
             additions += 1
@@ -202,11 +211,22 @@ def changed_rows(source_rows: list[dict], existing_records: list[dict]) -> tuple
         ):
             updates += 1
             changed.append(row)
+    for key, current in existing.items():
+        if key in source_keys or not bool_value(field(current, "Active"), True):
+            continue
+        deactivated += 1
+        changed.append({
+            KEY_FIELD: key,
+            "Name": text_value(field(current, "Name")),
+            "Active": False,
+            "Display Order": _number(field(current, "Display Order")),
+        })
     return changed, {
         "source_rows": len(source_rows),
         "database_rows": len(existing),
         "added": additions,
         "updated": updates,
+        "deactivated": deactivated,
         "unchanged": len(source_rows) - additions - updates,
     }
 
