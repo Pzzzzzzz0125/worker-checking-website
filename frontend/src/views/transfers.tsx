@@ -243,7 +243,10 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [jobAddressDetail, setJobAddressDetail] = useState("")
   const [invoiceDescription, setInvoiceDescription] = useState("")
   const [unitPrice, setUnitPrice] = useState("")
-  const [invoiceAmount, setInvoiceAmount] = useState("")
+  const [itemCount, setItemCount] = useState("")
+  const calculatedInvoiceAmount = Math.round(
+    Number(unitPrice || 0) * Number(itemCount || 0) * 100,
+  ) / 100
 
   const checkAccess = async () => {
     const value = await api<Access>("/api/export/access")
@@ -331,7 +334,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
     if (!jobAddress.trim()) return toast.error("Enter the Job address.")
     if (!invoiceDescription.trim()) return toast.error("Enter the invoice Description.")
     if (Number(unitPrice) <= 0) return toast.error("Enter a Unit price greater than 0.")
-    if (Number(invoiceAmount) <= 0) return toast.error("Enter an Amount greater than 0.")
+    if (Number(itemCount) <= 0) return toast.error("Enter a Number greater than 0.")
     setInvoiceLoading(format)
     try {
       const filename = await downloadJSON("/api/export/template", {
@@ -348,7 +351,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
         job_address_detail: jobAddressDetail,
         description: invoiceDescription,
         unit_price: Number(unitPrice),
-        amount: Number(invoiceAmount),
+        number: Number(itemCount),
       })
       toast.success(`${filename} downloaded.`)
     } catch (error) {
@@ -437,10 +440,11 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
         <label className="field-label sm:col-span-2">Address details<Input value={jobAddressDetail} onChange={event => setJobAddressDetail(event.target.value)} placeholder="City, state, ZIP, unit or lot (optional)" /></label>
       </CardContent></Card>
 
-      <Card><CardHeader><CardTitle>3. Description and Amount</CardTitle><CardDescription>Enter the invoice wording and amounts exactly as they should appear in the spreadsheet.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
-        <label className="field-label sm:col-span-2">Description<Textarea value={invoiceDescription} onChange={event => setInvoiceDescription(event.target.value)} placeholder="Describe the work, milestone, deposit, or payment" /></label>
-        <label className="field-label">Unit price<Input type="number" min="0" step=".01" value={unitPrice} onChange={event => {const next=event.target.value;setUnitPrice(next);if(!invoiceAmount||invoiceAmount===unitPrice)setInvoiceAmount(next)}} placeholder="0.00" /></label>
-        <label className="field-label">Amount<Input type="number" min="0" step=".01" value={invoiceAmount} onChange={event => setInvoiceAmount(event.target.value)} placeholder="0.00" /></label>
+      <Card><CardHeader><CardTitle>3. Description and Pricing</CardTitle><CardDescription>Enter the Unit price and Number. Amount is calculated automatically; Number is not printed on the invoice.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3">
+        <label className="field-label sm:col-span-3">Description<Textarea value={invoiceDescription} onChange={event => setInvoiceDescription(event.target.value)} placeholder="Describe the work, milestone, deposit, or payment" /></label>
+        <label className="field-label">Unit price<Input type="number" min="0" step=".01" value={unitPrice} onChange={event => setUnitPrice(event.target.value)} placeholder="0.00" /></label>
+        <label className="field-label">Number / quantity<Input type="number" min="0" step=".01" value={itemCount} onChange={event => setItemCount(event.target.value)} placeholder="0" /><span className="text-xs font-normal text-muted-foreground">Used for calculation only; not printed.</span></label>
+        <label className="field-label">Amount (calculated)<Input type="text" readOnly value={`$${calculatedInvoiceAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`} className="cursor-not-allowed bg-slate-50 tabular-nums" /></label>
       </CardContent></Card>
 
       <Card><CardHeader><CardTitle>4. Date and Payment</CardTitle><CardDescription>The payment methods and standard footer text already come from the approved template.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-2">
@@ -448,7 +452,7 @@ export function ExportView({ bootstrap }: { bootstrap: Bootstrap }) {
         <label className="field-label">Payment terms<Input list="payment-terms" value={paymentTerms} onChange={event => setPaymentTerms(event.target.value)} placeholder="Upon Receipt" /><datalist id="payment-terms"><option value="Upon Receipt"/><option value="Net 15"/><option value="Net 30"/></datalist></label>
       </CardContent></Card>
 
-      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Invoice total</strong><p className="text-2xl font-bold tabular-nums text-primary">${Number(invoiceAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p><p className="mt-1 text-xs text-muted-foreground">Choose the format you need. Both files contain the same invoice data.</p></div><div className="flex flex-col gap-2 sm:flex-row"><Button size="lg" variant="outline" onClick={() => void generateInvoice("xlsx")} disabled={invoiceLoading !== null}>{invoiceLoading==="xlsx"?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{invoiceLoading==="xlsx"?"Generating Excel…":"Download Excel"}</Button><Button size="lg" onClick={() => void generateInvoice("pdf")} disabled={invoiceLoading !== null}>{invoiceLoading==="pdf"?<LoaderCircle className="size-4 animate-spin"/>:<FileText className="size-4" />}{invoiceLoading==="pdf"?"Generating PDF…":"Download PDF"}</Button></div></CardContent></Card>
+      <Card><CardContent className="flex flex-col gap-4 !pt-5 sm:flex-row sm:items-center sm:justify-between"><div><strong className="block">Invoice total</strong><p className="text-2xl font-bold tabular-nums text-primary">${calculatedInvoiceAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p><p className="mt-1 text-xs text-muted-foreground">Calculated as Unit price × Number. Number is not included in the downloaded invoice.</p></div><div className="flex flex-col gap-2 sm:flex-row"><Button size="lg" variant="outline" onClick={() => void generateInvoice("xlsx")} disabled={invoiceLoading !== null}>{invoiceLoading==="xlsx"?<LoaderCircle className="size-4 animate-spin"/>:<FileSpreadsheet className="size-4" />}{invoiceLoading==="xlsx"?"Generating Excel…":"Download Excel"}</Button><Button size="lg" onClick={() => void generateInvoice("pdf")} disabled={invoiceLoading !== null}>{invoiceLoading==="pdf"?<LoaderCircle className="size-4 animate-spin"/>:<FileText className="size-4" />}{invoiceLoading==="pdf"?"Generating PDF…":"Download PDF"}</Button></div></CardContent></Card>
     </div>
   </div>
 

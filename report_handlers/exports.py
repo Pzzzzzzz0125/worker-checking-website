@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
@@ -182,14 +183,24 @@ def _invoice_text(
 
 def invoice_values(body: dict) -> dict[str, str | float]:
     try:
-        unit_price = round(float(body.get("unit_price") or 0), 2)
-        amount = round(float(body.get("amount") or unit_price), 2)
-    except (TypeError, ValueError):
-        raise ValueError("Unit price and amount must be numbers.") from None
-    if unit_price <= 0 or unit_price > 100_000_000:
+        unit_price_decimal = Decimal(str(body.get("unit_price") or 0))
+        item_count = Decimal(str(body.get("number") or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("Unit price and Number must be valid numbers.") from None
+    if not unit_price_decimal.is_finite() or unit_price_decimal <= 0 or unit_price_decimal > 100_000_000:
         raise ValueError("Enter a Unit price greater than 0.")
-    if amount <= 0 or amount > 100_000_000:
-        raise ValueError("Enter an Amount greater than 0.")
+    if not item_count.is_finite() or item_count <= 0 or item_count > 1_000_000:
+        raise ValueError("Enter a Number greater than 0.")
+    unit_price_decimal = unit_price_decimal.quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP,
+    )
+    amount_decimal = (unit_price_decimal * item_count).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP,
+    )
+    if amount_decimal > 100_000_000:
+        raise ValueError("The calculated Amount must not exceed $100,000,000.")
+    unit_price = float(unit_price_decimal)
+    amount = float(amount_decimal)
 
     bill_to_name = _invoice_text(
         body, "bill_to_name", "Bill To name", required=True, limit=120,

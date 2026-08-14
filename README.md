@@ -555,8 +555,10 @@ The chooser opens an independent setup page for each output:
 
 1. Fixed company/license/contact/footer values and the invoice number are
    automatic.
-2. The user completes Bill To, Job Address, Description and Amount, Date,
-   payment terms, Unit Price, and Amount. Saved Sites appear as Job Address
+2. The user completes Bill To, Job Address, Description, Date, payment terms,
+   Unit Price, and Number/quantity. Amount is read-only and is calculated by
+   the server as `Unit Price × Number`. Number is used only for this calculation
+   and is not displayed in the final invoice. Saved Sites appear as Job Address
    suggestions, but a matching Site is not currently required.
 3. Excel produces the approved editable workbook; PDF produces a print-ready
    document. Both use the same values and displayed invoice number for that

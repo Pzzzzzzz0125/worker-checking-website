@@ -109,7 +109,8 @@ class ExportTests(unittest.TestCase):
             "invoice_date": "2026-07-07",
             "payment_terms": "Upon Receipt",
             "unit_price": 750,
-            "amount": 750,
+            "number": 2,
+            "amount": 1,
         })
         self.assertEqual(values["F3"], "INV-42")
         self.assertEqual(values["F8"], "100 Main St")
@@ -118,8 +119,23 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(values["A12"], "500 Market St, San Jose, CA 95113")
         self.assertEqual(values["A16"], "First progress payment")
         self.assertEqual(values["F16"], 750)
-        self.assertEqual(values["G16"], 750)
+        self.assertEqual(values["G16"], 1500)
+        self.assertEqual(values["G27"], 1500)
+        self.assertEqual(values["G30"], 1500)
         self.assertEqual(values["B27"], "Upon Receipt")
+        self.assertNotIn("number", values)
+
+    def test_invoice_requires_number_instead_of_accepting_a_supplied_amount(self):
+        with self.assertRaisesRegex(ValueError, "Number greater than 0"):
+            invoice_values({
+                "bill_to_name": "Example Customer",
+                "bill_to_address": "500 Market St",
+                "job_address": "100 Main St",
+                "description": "Deposit",
+                "invoice_date": "2026-07-07",
+                "unit_price": 100,
+                "amount": 999,
+            })
 
     def test_invoice_number_is_generated_when_not_supplied(self):
         values = invoice_values({
@@ -129,7 +145,7 @@ class ExportTests(unittest.TestCase):
             "description": "Deposit",
             "invoice_date": "2026-07-07",
             "unit_price": 100,
-            "amount": 100,
+            "number": 1,
         })
         self.assertRegex(str(values["F3"]), r"^SC-\d{8}-\d{6}$")
 
@@ -146,7 +162,7 @@ class ExportTests(unittest.TestCase):
             "invoice_date": "2026-07-07",
             "payment_terms": "Upon Receipt",
             "unit_price": 750,
-            "amount": 750,
+            "number": 2,
         })
         pdf = _invoice_pdf(values)
         self.assertTrue(pdf.startswith(b"%PDF-"))
