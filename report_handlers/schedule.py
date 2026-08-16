@@ -140,7 +140,6 @@ def _conflict_reason(candidate: dict, existing: list[dict]) -> str:
             continue
         if (
             row["site"].casefold() == candidate["site"].casefold()
-            and row["task"].casefold() == candidate["task"].casefold()
             and row["start_time"] == candidate["start_time"]
             and row["end_time"] == candidate["end_time"]
         ):
@@ -161,7 +160,6 @@ def _conflict_reason(candidate: dict, existing: list[dict]) -> str:
 
 def _payload(body: dict, worker: dict, cost_codes: dict[str, str], current: dict | None = None) -> dict:
     site = _clean(body.get("site"), 240)
-    task = _clean(body.get("task"), 240)
     if not site:
         raise ValueError("Site is required for every schedule.")
     supplied_codes = body.get("cost_code_ids")
@@ -173,8 +171,6 @@ def _payload(body: dict, worker: dict, cost_codes: dict[str, str], current: dict
     unknown_codes = [value for value in selected_codes if value not in cost_codes]
     if unknown_codes:
         raise ValueError("Choose Cost Codes from the active Cost Code list.")
-    if not task:
-        raise ValueError("Work task is required for every schedule.")
     start = _clean(body.get("start_time"), 20)
     end = _clean(body.get("end_time"), 20)
     _minutes(start)
@@ -190,7 +186,9 @@ def _payload(body: dict, worker: dict, cost_codes: dict[str, str], current: dict
         "Site": site,
         "Cost Code IDs": ";".join(selected_codes),
         "Cost Code Names": ";".join(cost_codes[value] for value in selected_codes),
-        "Task": task,
+        # Keep the legacy field empty so existing Lark/PostgreSQL schemas stay
+        # compatible while Cost Code remains the single work classification.
+        "Task": "",
         "Start Time": start,
         "End Time": end,
         "Notes": _clean(body.get("notes"), 1_000),
@@ -283,7 +281,6 @@ def _conflict_message(
             "Schedule conflict needs approval",
             f"Worker: {first['worker_name']}",
             f"Site: {first['site']}",
-            f"Task: {first['task']}",
             f"Cost Codes: {', '.join(first['cost_code_names']) or '—'}",
             (
                 f"Time: {first['start_time']}–{first['end_time']}"
@@ -414,11 +411,34 @@ def _save(base, body: dict, session: dict) -> dict:
         _row({"record_id": candidate.get("record_id", ""), "fields": fields})
         for fields, candidate, _ in plans
     ]
-    conflicts = [
-        {"schedule_date": row["schedule_date"], "reason": conflict}
-        for row, (_, _, conflict) in zip(stored_rows, plans)
-        if conflict
-    ]
+    conflicts = []
+    for row, (_, _, conflict) in zip(stored_rows, plans):
+        if not conflict:
+            continue
+        related = [
+            item for item in current_rows
+            if item["schedule_key"] != row["schedule_key"]
+            and item["status"] in ACTIVE_STATUSES
+            and item["worker_key"] == row["worker_key"]
+            and item["schedule_date"] == row["schedule_date"]
+        ]
+        conflicts.append({
+            "schedule_date": row["schedule_date"],
+            "reason": conflict,
+            "proposed": row,
+            "existing": related,
+        })
+    if conflicts and body.get("confirm_conflicts") is not True:
+        return {
+            "schedule": stored_rows[0],
+            "schedules": stored_rows,
+            "submitted_for_approval": False,
+            "requires_conflict_approval": True,
+            "conflicts": conflicts,
+            "created": False,
+            "created_count": 0,
+            "notification": None,
+        }
     available_recipients = schedule_notification_recipients(
         _clean(session.get("sub"), 160)
     )
@@ -439,6 +459,7 @@ def _save(base, body: dict, session: dict) -> dict:
         "schedule": stored_rows[0],
         "schedules": stored_rows,
         "submitted_for_approval": bool(conflicts),
+        "requires_conflict_approval": False,
         "conflicts": conflicts,
         "created": bool(saved_results[0].get("created", False)),
         "created_count": sum(bool(result.get("created", False)) for result in saved_results),

@@ -1,6 +1,6 @@
 import unittest
 
-from report_handlers.entries import clear_day, joined_days, save_rows
+from report_handlers.entries import clear_day, clear_days, joined_days, save_rows
 
 
 def record(record_id, **fields):
@@ -248,6 +248,32 @@ class EntryTests(unittest.TestCase):
                 ("Work Days", "day-record"),
             ],
         )
+
+    def test_clear_days_batch_deletes_only_requested_worker_dates(self):
+        class ClearBase(FakeBase):
+            def records(self, table_name, **kwargs):
+                del kwargs
+                if table_name == "Work Days":
+                    return [
+                        record("day-1", **{"Work Day Key": "7|2026-07-02", "Work Date": "2026-07-02"}),
+                        record("day-2", **{"Work Day Key": "7|2026-07-03", "Work Date": "2026-07-03"}),
+                        record("keep-day", **{"Work Day Key": "8|2026-07-03", "Work Date": "2026-07-03"}),
+                    ]
+                if table_name == "Location Entries":
+                    return [
+                        record("location-1", **{"Work Day Key": "7|2026-07-02", "Work Date": "2026-07-02"}),
+                        record("location-2", **{"Work Day Key": "7|2026-07-03", "Work Date": "2026-07-03"}),
+                        record("keep-location", **{"Work Day Key": "8|2026-07-03", "Work Date": "2026-07-03"}),
+                    ]
+                return []
+
+        base = ClearBase()
+        result = clear_days(base, [("7", "2026-07-02"), ("7", "2026-07-03")])
+        self.assertEqual(result["requested"], 2)
+        self.assertEqual(result["deleted_days"], 2)
+        self.assertEqual(result["deleted_locations"], 2)
+        self.assertNotIn(("Work Days", "keep-day"), base.deleted)
+        self.assertNotIn(("Location Entries", "keep-location"), base.deleted)
 
     def test_joined_days_recombines_cost_center_rows(self):
         day = record(

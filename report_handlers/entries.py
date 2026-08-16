@@ -503,6 +503,37 @@ def clear_day(base: LarkBase, worker_key: str, work_date: str) -> dict:
     }
 
 
+def clear_days(base: LarkBase, targets: list[tuple[str, str]]) -> dict:
+    """Delete multiple worker/day records with one range read and two batch deletes."""
+    normalized = {
+        (str(worker_key), date.fromisoformat(str(work_date)).isoformat())
+        for worker_key, work_date in targets
+    }
+    if not normalized:
+        return {"cleared": True, "requested": 0, "deleted_days": 0, "deleted_locations": 0}
+    if len(normalized) > 500:
+        raise ValueError("Clear 500 records or fewer at one time.")
+    dates = [work_date for _, work_date in normalized]
+    day_records, location_records = load_range(base, min(dates), max(dates))
+    target_keys = {f"{worker_key}|{work_date}" for worker_key, work_date in normalized}
+    location_ids = [
+        str(record.get("record_id") or "")
+        for record in location_records
+        if text_value(field(record, "Work Day Key")) in target_keys
+    ]
+    day_ids = [
+        str(record.get("record_id") or "")
+        for record in day_records
+        if text_value(field(record, "Work Day Key")) in target_keys
+    ]
+    return {
+        "cleared": True,
+        "requested": len(normalized),
+        "deleted_days": base.delete_record_ids("Work Days", day_ids),
+        "deleted_locations": base.delete_record_ids("Location Entries", location_ids),
+    }
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not session(self):
@@ -584,6 +615,18 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, {"saved": True, **save_rows(base, rows, worker_map)})
                 return
             if action == "day_clear":
+                requested = body.get("records")
+                if isinstance(requested, list):
+                    targets = []
+                    for row in requested:
+                        if not isinstance(row, dict):
+                            raise ValueError("Every clear target must be a record.")
+                        worker_key = str(int(row.get("worker_id") or 0))
+                        if worker_key not in worker_map or not worker_map[worker_key]["active"]:
+                            raise ValueError("Choose only active workers.")
+                        targets.append((worker_key, str(row.get("date") or "")))
+                    json_response(self, clear_days(base, targets))
+                    return
                 worker_key = str(int(body.get("worker_id") or 0))
                 if worker_key not in worker_map or not worker_map[worker_key]["active"]:
                     raise ValueError("Choose a valid worker.")

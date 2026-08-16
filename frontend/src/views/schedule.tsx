@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input, Textarea } from "@/components/ui/input"
 import { api, postJSON } from "@/lib/api"
 import type { Bootstrap } from "@/lib/types"
@@ -17,7 +18,6 @@ type ScheduleRow = {
   site: string
   cost_code_ids: string[]
   cost_code_names: string[]
-  task: string
   start_time: string
   end_time: string
   notes: string
@@ -34,11 +34,9 @@ type FormState = {
   worker_key: string
   site: string
   cost_code_ids: string[]
-  task: string
   start_time: string
   end_time: string
   notes: string
-  notification_recipient_ids: string[]
 }
 
 type NotificationRecipient = {
@@ -59,6 +57,28 @@ type NotificationResult = {
   errors?: { name?: string; code?: number | null; error: string }[] | string[]
 }
 
+type ConflictDetail = {
+  schedule_date: string
+  reason: string
+  proposed: ScheduleRow
+  existing: ScheduleRow[]
+}
+
+type ScheduleSaveResult = {
+  schedule: ScheduleRow
+  schedules?: ScheduleRow[]
+  submitted_for_approval: boolean
+  requires_conflict_approval?: boolean
+  conflicts?: ConflictDetail[]
+  notification?: NotificationResult
+}
+
+type PendingConflict = {
+  payload: Record<string, unknown>
+  dates: string[]
+  conflicts: ConflictDetail[]
+}
+
 function monday(value: string) {
   const day = new Date(`${value}T12:00:00`)
   const offset = (day.getDay() + 6) % 7
@@ -73,7 +93,7 @@ function shift(value: string, days: number) {
 }
 
 function emptyForm(date: string): FormState {
-  return { schedule_key: "", schedule_date: date, schedule_end_date: date, worker_key: "", site: "", cost_code_ids: [], task: "", start_time: "", end_time: "", notes: "", notification_recipient_ids: [] }
+  return { schedule_key: "", schedule_date: date, schedule_end_date: date, worker_key: "", site: "", cost_code_ids: [], start_time: "", end_time: "", notes: "" }
 }
 
 function scheduleDays(start: string, end: string) {
@@ -150,12 +170,15 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [reviewing, setReviewing] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [notificationRecipients, setNotificationRecipients] = useState<NotificationRecipient[]>([])
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null)
+  const [conflictRecipientIds, setConflictRecipientIds] = useState<string[]>([])
+  const [submittingConflict, setSubmittingConflict] = useState(false)
 
   const weekEnd = shift(weekStart, 6)
   const workers = useMemo(() => bootstrap.workers.filter(worker => worker.active !== 0), [bootstrap.workers])
   const visibleRows = rows.filter(row => {
     const needle = search.trim().toLowerCase()
-    return !needle || [row.worker_name, row.site, row.task, row.status].some(value => value.toLowerCase().includes(needle))
+    return !needle || [row.worker_name, row.site, ...row.cost_code_names, row.status].some(value => value.toLowerCase().includes(needle))
   })
 
   const load = async () => {
@@ -165,11 +188,6 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
       setRows(result.rows || [])
       const recipients = result.notification_recipients || []
       setNotificationRecipients(recipients)
-      const optionalIds = new Set(recipients.filter(item => !item.required).map(item => item.open_id))
-      setForm(current => ({
-        ...current,
-        notification_recipient_ids: current.notification_recipient_ids.filter(id => optionalIds.has(id)),
-      }))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
@@ -195,11 +213,9 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
       worker_key: row.worker_key,
       site: row.site,
       cost_code_ids: row.cost_code_ids,
-      task: row.task,
       start_time: row.start_time,
       end_time: row.end_time,
       notes: row.notes,
-      notification_recipient_ids: [],
     })
   }
 
@@ -222,8 +238,8 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!form.worker_key || !form.site.trim() || !form.task.trim() || !form.cost_code_ids.length) {
-      toast.error("Choose a worker, Site, Cost Code, and work task.")
+    if (!form.worker_key || !form.site.trim() || !form.cost_code_ids.length) {
+      toast.error("Choose a worker, Site, and Cost Code.")
       return
     }
     setSaving(true)
@@ -241,7 +257,13 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
         toast.error("Choose at least one date and no more than 31 dates.")
         return
       }
-      const result = await postJSON<{ schedule: ScheduleRow; schedules?: ScheduleRow[]; submitted_for_approval: boolean; conflicts?: { schedule_date: string; reason: string }[]; notification?: NotificationResult }>("/api/schedule", { action: "save", ...form, schedule_dates: dates, schedule_end_date: dates[dates.length - 1] })
+      const payload = { action: "save", ...form, schedule_dates: dates, schedule_end_date: dates[dates.length - 1], confirm_conflicts: false }
+      const result = await postJSON<ScheduleSaveResult>("/api/schedule", payload)
+      if (result.requires_conflict_approval) {
+        setPendingConflict({ payload, dates, conflicts: result.conflicts || [] })
+        setConflictRecipientIds([])
+        return
+      }
       const savedCount = result.schedules?.length || 1
       toast.success(result.submitted_for_approval ? `${savedCount} schedule${savedCount === 1 ? "" : "s"} saved; conflicts need approval.` : `${savedCount} schedule${savedCount === 1 ? "" : "s"} confirmed.`)
       if (result.submitted_for_approval && result.notification) {
@@ -263,6 +285,39 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const submitConflictApproval = async () => {
+    if (!pendingConflict) return
+    const selectableManagers = notificationRecipients.filter(item => !item.required)
+    if (selectableManagers.length && !conflictRecipientIds.length) {
+      toast.error("Select at least one Schedule Manager to request approval.")
+      return
+    }
+    setSubmittingConflict(true)
+    try {
+      const result = await postJSON<ScheduleSaveResult>("/api/schedule", {
+        ...pendingConflict.payload,
+        confirm_conflicts: true,
+        notification_recipient_ids: conflictRecipientIds,
+      })
+      const savedCount = result.schedules?.length || 1
+      toast.success(`${savedCount} conflict${savedCount === 1 ? "" : "s"} saved for approval.`)
+      const notice = result.notification
+      if (notice?.sent && notice.failed === 0) toast.success(`Lark approval request sent to ${notice.sent} recipient${notice.sent === 1 ? "" : "s"}.`)
+      else if (notice?.sent) toast.warning(`Lark request sent to ${notice.sent}; ${notice.failed} failed.`)
+      else toast.error(`Conflict saved, but no Lark approval message was sent.${notice?.warning ? ` ${notice.warning}` : ""}`)
+      const firstDate = pendingConflict.dates[0]
+      setPendingConflict(null)
+      setConflictRecipientIds([])
+      setWeekStart(monday(firstDate))
+      resetForm()
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSubmittingConflict(false)
     }
   }
 
@@ -306,12 +361,9 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   }))
   const requiredRecipients = notificationRecipients.filter(item => item.required)
   const optionalManagers = notificationRecipients.filter(item => !item.required)
-  const toggleNotificationRecipient = (openId: string) => setForm(current => ({
-    ...current,
-    notification_recipient_ids: current.notification_recipient_ids.includes(openId)
-      ? current.notification_recipient_ids.filter(value => value !== openId)
-      : [...current.notification_recipient_ids, openId],
-  }))
+  const toggleConflictRecipient = (openId: string) => setConflictRecipientIds(current => current.includes(openId)
+    ? current.filter(value => value !== openId)
+    : [...current, openId])
   const toggleDate = (value: string) => setSelectedDates(current => current.includes(value)
     ? current.filter(date => date !== value)
     : value ? current.length >= 31 ? current : [...current, value].sort() : [])
@@ -357,14 +409,14 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
 
   return <div className="page">
     <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-      <div><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><CalendarClock className="size-3" />Schedule manager only</div><h1 className="page-title">Schedule</h1><p className="page-subtitle">Plan who goes to which Site, under which Cost Code, and what they will do. Site, Cost Code, and task are required; schedule times are optional.</p></div>
+      <div><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700"><CalendarClock className="size-3" />Schedule manager only</div><h1 className="page-title">Schedule</h1><p className="page-subtitle">Plan a worker's Site and Cost Code. Site and Cost Code are required; schedule times are optional.</p></div>
       <div className="flex items-center gap-2"><Button variant="outline" size="icon" onClick={() => setWeekStart(value => shift(value, -7))}><ChevronLeft className="size-4" /></Button><div className="min-w-44 text-center text-sm font-semibold">{displayDate(weekStart, true)} – {displayDate(weekEnd, true)}</div><Button variant="outline" size="icon" onClick={() => setWeekStart(value => shift(value, 7))}><ChevronRight className="size-4" /></Button><Button variant="outline" onClick={() => setWeekStart(monday(localISO()))}><RotateCcw className="size-4" />This week</Button></div>
     </div>
 
     <Card className="mb-5">
       <CardHeader>
         <CardTitle>{form.schedule_key ? "Edit schedule" : "Plan work"}</CardTitle>
-        <CardDescription>Overlapping Site assignments for one worker cannot be confirmed directly. They are saved only as a pending approval request.</CardDescription>
+        <CardDescription>When an assignment conflicts, nothing is saved until you review the conflict and choose managers for approval.</CardDescription>
         {!form.schedule_key && <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <button type="button" className={`rounded-xl border px-4 py-3 text-left transition-colors ${planMode === "single" ? "border-primary bg-primary text-primary-foreground" : "bg-white hover:border-primary/40"}`} onClick={beginSingleMode}>
             <span className="block text-sm font-bold">Single day</span><span className={`mt-1 block text-xs ${planMode === "single" ? "text-blue-100" : "text-muted-foreground"}`}>Plan one worker assignment for one date.</span>
@@ -389,21 +441,9 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
           <div className="flex flex-wrap gap-2">{form.cost_code_ids.map(id => { const code = bootstrap.cost_centers.find(item => item.id === id); return <button type="button" key={id} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-900" onClick={() => toggleCostCode(id)}>{code ? `${code.name} (${code.id})` : id} ×</button> })}{!form.cost_code_ids.length && <span className="text-xs text-red-700">Select at least one Cost Code.</span>}</div>
           <div className="grid max-h-40 gap-1 overflow-auto rounded-lg border bg-white p-2 sm:grid-cols-2">{visibleCostCodes.map(code => <label key={code.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-blue-50"><input type="checkbox" checked={form.cost_code_ids.includes(code.id)} onChange={() => toggleCostCode(code.id)} /><span className="truncate">{code.name} <span className="text-muted-foreground">({code.id})</span></span></label>)}{!visibleCostCodes.length && <span className="p-2 text-xs text-muted-foreground">No Cost Codes match.</span>}</div>
         </div>
-        <div className="grid gap-4 md:grid-cols-[1.2fr_.4fr_.4fr]">
-          <label className="field-label">Work task<Input value={form.task} onChange={event => setField("task", event.target.value)} placeholder="e.g. Framing, cleanup, inspection" required /></label>
+        <div className="grid gap-4 md:grid-cols-2">
           <label className="field-label">Start time<Input type="time" value={form.start_time} onChange={event => setField("start_time", event.target.value)} /></label>
           <label className="field-label">End time<Input type="time" value={form.end_time} onChange={event => setField("end_time", event.target.value)} /></label>
-        </div>
-        <div className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><div className="flex items-center gap-2 text-sm font-bold text-slate-950"><Bell className="size-4 text-blue-700" />Conflict notification</div><p className="mt-1 text-xs text-muted-foreground">If this plan conflicts, every Super Admin receives a Lark message. Select additional Schedule Managers who should also review it.</p></div>
-            {optionalManagers.length > 0 && <div className="flex gap-2"><button type="button" className="text-xs font-semibold text-blue-700 underline" onClick={() => setForm(current => ({ ...current, notification_recipient_ids: optionalManagers.map(item => item.open_id) }))}>Select all managers</button><button type="button" className="text-xs font-semibold text-slate-600 underline" onClick={() => setForm(current => ({ ...current, notification_recipient_ids: [] }))}>Clear managers</button></div>}
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {requiredRecipients.map(recipient => <label key={recipient.open_id} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs"><input type="checkbox" checked disabled /><span className="min-w-0"><strong className="block truncate">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Super Admin · always notified</span></span></label>)}
-            {optionalManagers.map(recipient => <label key={recipient.open_id} className="flex cursor-pointer items-center gap-2 rounded-lg border bg-white px-3 py-2 text-xs hover:border-blue-300 hover:bg-blue-50"><input type="checkbox" checked={form.notification_recipient_ids.includes(recipient.open_id)} onChange={() => toggleNotificationRecipient(recipient.open_id)} /><span className="min-w-0"><strong className="block truncate">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Schedule Manager</span></span></label>)}
-            {!notificationRecipients.length && <p className="text-xs text-amber-700">No eligible Lark recipients are registered. Ask administrators and managers to sign in once.</p>}
-          </div>
         </div>
         <label className="field-label">Notes<Textarea value={form.notes} onChange={event => setField("notes", event.target.value)} placeholder="Optional planning notes" /></label>
         <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="ghost" onClick={resetForm}>Clear</Button><Button type="submit" disabled={saving}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : form.schedule_key ? <Edit3 className="size-4" /> : <Plus className="size-4" />}{saving ? "Saving…" : form.schedule_key ? "Save changes" : "Add schedule"}</Button></div>
@@ -412,7 +452,36 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
 
     <Card>
       <CardHeader><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><CardTitle>Weekly assignments</CardTitle><CardDescription>Confirmed schedules can be copied to Entry later. Pending conflicts stay out of Entry until approved.</CardDescription></div><Input className="sm:max-w-xs" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search worker, Site, Cost Code…" /></div></CardHeader>
-        <CardContent>{loading ? <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading schedule…</div> : visibleRows.length ? <div className="grid gap-3">{visibleRows.map(row => <div key={row.schedule_key} className={`rounded-xl border p-4 ${row.status === "pending_approval" ? "border-amber-300 bg-amber-50/50" : row.status === "rejected" || row.status === "cancelled" ? "opacity-60" : ""}`}><div className="flex flex-col gap-3 lg:flex-row lg:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong>{displayDate(row.schedule_date, true)}</strong>{statusBadge(row.status)}{row.status === "pending_approval" && <AlertTriangle className="size-4 text-amber-600" />}</div><p className="mt-1 text-sm"><strong>{row.worker_name}</strong><span className="mx-2 text-muted-foreground">·</span>{row.site}<span className="mx-2 text-muted-foreground">·</span>{row.task}</p><p className="mt-1 text-xs text-muted-foreground">Cost Code: {row.cost_code_names.length ? row.cost_code_names.join(", ") : "—"}{row.start_time && row.end_time ? ` · ${row.start_time}–${row.end_time}` : " · Time not set"}{row.notes ? ` · ${row.notes}` : ""}</p>{row.conflict_reason && <p className="mt-2 text-xs font-semibold text-amber-800">{row.conflict_reason}</p>}{row.submitted_by_name && <p className="mt-2 text-[11px] text-muted-foreground">Submitted by {row.submitted_by_name}{row.reviewed_by_name ? ` · reviewed by ${row.reviewed_by_name}` : ""}</p>}</div><div className="flex flex-wrap gap-2 lg:justify-end">{row.status === "pending_approval" && <><Button size="sm" variant="outline" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "rejected")}><X className="size-4" />Reject</Button><Button size="sm" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "approved")}><Check className="size-4" />Approve</Button></>}{row.status !== "cancelled" && row.status !== "rejected" && <><Button size="sm" variant="outline" onClick={() => editRow(row)}><Edit3 className="size-4" />Edit</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" disabled={reviewing === row.schedule_key} onClick={() => void cancel(row)}><X className="size-4" />Cancel</Button></>}</div></div></div>)}</div> : <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No schedules for this week.</div>}</CardContent>
+        <CardContent>{loading ? <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading schedule…</div> : visibleRows.length ? <div className="grid gap-3">{visibleRows.map(row => <div key={row.schedule_key} className={`rounded-xl border p-4 ${row.status === "pending_approval" ? "border-amber-300 bg-amber-50/50" : row.status === "rejected" || row.status === "cancelled" ? "opacity-60" : ""}`}><div className="flex flex-col gap-3 lg:flex-row lg:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong>{displayDate(row.schedule_date, true)}</strong>{statusBadge(row.status)}{row.status === "pending_approval" && <AlertTriangle className="size-4 text-amber-600" />}</div><p className="mt-1 text-sm"><strong>{row.worker_name}</strong><span className="mx-2 text-muted-foreground">·</span>{row.site}</p><p className="mt-1 text-xs text-muted-foreground">Cost Code: {row.cost_code_names.length ? row.cost_code_names.join(", ") : "—"}{row.start_time && row.end_time ? ` · ${row.start_time}–${row.end_time}` : " · Time not set"}{row.notes ? ` · ${row.notes}` : ""}</p>{row.conflict_reason && <p className="mt-2 text-xs font-semibold text-amber-800">{row.conflict_reason}</p>}{row.submitted_by_name && <p className="mt-2 text-[11px] text-muted-foreground">Submitted by {row.submitted_by_name}{row.reviewed_by_name ? ` · reviewed by ${row.reviewed_by_name}` : ""}</p>}</div><div className="flex flex-wrap gap-2 lg:justify-end">{row.status === "pending_approval" && <><Button size="sm" variant="outline" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "rejected")}><X className="size-4" />Reject</Button><Button size="sm" disabled={reviewing === row.schedule_key} onClick={() => void review(row, "approved")}><Check className="size-4" />Approve</Button></>}{row.status !== "cancelled" && row.status !== "rejected" && <><Button size="sm" variant="outline" onClick={() => editRow(row)}><Edit3 className="size-4" />Edit</Button><Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700" disabled={reviewing === row.schedule_key} onClick={() => void cancel(row)}><X className="size-4" />Cancel</Button></>}</div></div></div>)}</div> : <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No schedules for this week.</div>}</CardContent>
     </Card>
+
+    <Dialog open={Boolean(pendingConflict)} onOpenChange={open => { if (!open && !submittingConflict) { setPendingConflict(null); setConflictRecipientIds([]) } }}>
+      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-5 text-amber-600" />Schedule conflict found</DialogTitle>
+          <DialogDescription>Nothing has been saved yet. Review both assignments, then select one or more Schedule Managers to request approval.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          {pendingConflict?.conflicts.map((conflict, index) => <div key={`${conflict.schedule_date}-${index}`} className="rounded-xl border border-amber-300 bg-amber-50/60 p-4">
+            <p className="text-sm font-bold text-amber-950">{displayDate(conflict.schedule_date, true)}</p>
+            <p className="mt-1 text-xs font-semibold text-amber-800">{conflict.reason}</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-blue-200 bg-white p-3"><Badge>Proposed</Badge><p className="mt-2 font-bold">{conflict.proposed.worker_name}</p><p className="text-sm">{conflict.proposed.site}</p><p className="mt-1 text-xs text-muted-foreground">Cost Code: {conflict.proposed.cost_code_names.map((name, codeIndex) => `${name}${conflict.proposed.cost_code_ids[codeIndex] ? ` (${conflict.proposed.cost_code_ids[codeIndex]})` : ""}`).join(", ") || "—"}</p><p className="text-xs text-muted-foreground">Time: {conflict.proposed.start_time && conflict.proposed.end_time ? `${conflict.proposed.start_time}–${conflict.proposed.end_time}` : "not set"}</p>{conflict.proposed.notes && <p className="mt-1 text-xs text-muted-foreground">Notes: {conflict.proposed.notes}</p>}</div>
+              <div className="grid gap-2">{conflict.existing.map(existing => <div key={existing.schedule_key} className="rounded-lg border bg-white p-3"><Badge variant="warning">Existing</Badge><p className="mt-2 font-bold">{existing.worker_name}</p><p className="text-sm">{existing.site}</p><p className="mt-1 text-xs text-muted-foreground">Cost Code: {existing.cost_code_names.map((name, codeIndex) => `${name}${existing.cost_code_ids[codeIndex] ? ` (${existing.cost_code_ids[codeIndex]})` : ""}`).join(", ") || "—"}</p><p className="text-xs text-muted-foreground">Time: {existing.start_time && existing.end_time ? `${existing.start_time}–${existing.end_time}` : "not set"}</p>{existing.notes && <p className="mt-1 text-xs text-muted-foreground">Notes: {existing.notes}</p>}</div>)}</div>
+            </div>
+          </div>)}
+          <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2"><div><div className="flex items-center gap-2 text-sm font-bold"><Bell className="size-4 text-blue-700" />Choose approval recipients</div><p className="mt-1 text-xs text-muted-foreground">Super Admins are always notified. Select one or more additional Schedule Managers.</p></div>{optionalManagers.length > 0 && <Button type="button" size="sm" variant="outline" onClick={() => setConflictRecipientIds(conflictRecipientIds.length === optionalManagers.length ? [] : optionalManagers.map(item => item.open_id))}>{conflictRecipientIds.length === optionalManagers.length ? "Clear managers" : "Select all managers"}</Button>}</div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {requiredRecipients.map(recipient => <label key={recipient.open_id} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs"><input type="checkbox" checked disabled /><span><strong className="block">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Super Admin · always notified</span></span></label>)}
+              {optionalManagers.map(recipient => <label key={recipient.open_id} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs ${conflictRecipientIds.includes(recipient.open_id) ? "border-blue-500 bg-blue-100" : "bg-white hover:border-blue-300"}`}><input type="checkbox" checked={conflictRecipientIds.includes(recipient.open_id)} onChange={() => toggleConflictRecipient(recipient.open_id)} /><span><strong className="block">{recipient.name}{recipient.current ? " (you)" : ""}</strong><span className="text-muted-foreground">Schedule Manager</span></span></label>)}
+              {!notificationRecipients.length && <p className="text-xs text-red-700">No eligible approver is registered. Ask an administrator or Schedule Manager to sign in once.</p>}
+              {notificationRecipients.length > 0 && !optionalManagers.length && <p className="text-xs text-amber-700">No additional Schedule Manager is available; the listed Super Admins will receive this request.</p>}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 flex justify-end gap-2"><Button variant="ghost" disabled={submittingConflict} onClick={() => { setPendingConflict(null); setConflictRecipientIds([]) }}>Cancel</Button><Button disabled={submittingConflict || !notificationRecipients.length || (optionalManagers.length > 0 && !conflictRecipientIds.length)} onClick={() => void submitConflictApproval()}>{submittingConflict ? <LoaderCircle className="size-4 animate-spin" /> : <Bell className="size-4" />}{submittingConflict ? "Sending…" : "Send approval request"}</Button></div>
+      </DialogContent>
+    </Dialog>
   </div>
 }
