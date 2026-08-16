@@ -13,7 +13,7 @@ export type WorkRecord = {
   worker_id: number
   worker_name?: string
   work_date: string
-  status: "worked" | "off" | "unknown" | ""
+  status: "worked" | "off" | "sick_leave" | "unknown" | ""
   total_hours: number
   overtime_hours?: number
   location_hours_sum?: number

@@ -51,6 +51,12 @@ class NormalizedWorkCellTests(unittest.TestCase):
         self.assertEqual(parse_work_cell("off (vacation)").status, "off")
         self.assertEqual(parse_work_cell("-").status, "unknown")
 
+    def test_sick_leave_is_normalized_as_eight_paid_hours(self):
+        parsed = parse_work_cell("sick leave")
+        self.assertEqual(parsed.status, "sick_leave")
+        self.assertEqual(parsed.total_hours, 8)
+        self.assertEqual(format_work_cell("sick_leave", 8, []), "sick leave")
+
     def test_legacy_input_exports_as_normalized(self):
         parsed = parse_work_cell("432 (3h) / 1151 (5h), OT 2 hours").to_dict()
         self.assertEqual(

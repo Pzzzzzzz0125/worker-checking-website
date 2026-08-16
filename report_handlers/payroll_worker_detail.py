@@ -103,16 +103,34 @@ class handler(BaseHTTPRequestHandler):
             selected = [
                 dict(item) for item in data["days"]
                 if item["worker_key"] == worker["key"]
-                and item["status"] == "worked"
+                and item["status"] in {"worked", "sick_leave"}
                 and start.isoformat() <= item["date"] <= end.isoformat()
             ]
+            worked_selected = [item for item in selected if item["status"] == "worked"]
             breakdown = california_overtime(data["days"], worker["key"], start, end, worker["worker_type"])
             for day in selected:
-                part = breakdown.get(day["date"], {
-                    "regular_hours": day["total_hours"], "overtime_hours": 0,
-                    "doubletime_hours": 0, "weighted_hours": day["total_hours"],
-                })
+                paid_hours = float(day.get("total_hours") or 8)
+                part = (
+                    {
+                        "regular_hours": paid_hours,
+                        "overtime_hours": 0,
+                        "doubletime_hours": 0,
+                        "weighted_hours": paid_hours,
+                    }
+                    if day["status"] == "sick_leave"
+                    else breakdown.get(day["date"], {
+                        "regular_hours": day["total_hours"], "overtime_hours": 0,
+                        "doubletime_hours": 0, "weighted_hours": day["total_hours"],
+                    })
+                )
                 day.update(part)
+                if day["status"] == "sick_leave":
+                    day["locations"] = [{
+                        "location_id": f"sick-leave-{day['date']}",
+                        "name": "Sick leave",
+                        "hours": paid_hours,
+                    }]
+                    day["cost_centers"] = []
                 day["estimated_salary"] = round(part["weighted_hours"] * worker["daily_rate"] / 8.0 + day["extra_pay"], 2)
             selected.sort(key=lambda item: item["date"])
             json_response(
@@ -127,14 +145,17 @@ class handler(BaseHTTPRequestHandler):
                         "doubletime_hours": round(sum(item["doubletime_hours"] for item in selected), 2),
                         "weighted_hours": round(sum(item["weighted_hours"] for item in selected), 2),
                         "days": len(selected),
+                        "sick_leave_days": len([
+                            item for item in selected if item["status"] == "sick_leave"
+                        ]),
                         "estimated_salary": round(sum(item["estimated_salary"] for item in selected), 2),
                     },
                     "days": selected,
                     "locations": aggregate_with_estimated_cost(
-                        selected, "locations", worker["daily_rate"],
+                        worked_selected, "locations", worker["daily_rate"],
                     ),
                     "cost_centers": aggregate_with_estimated_cost(
-                        selected, "cost_centers", worker["daily_rate"],
+                        worked_selected, "cost_centers", worker["daily_rate"],
                     ),
                 },
             )

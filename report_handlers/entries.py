@@ -212,6 +212,8 @@ def normalized_text(
 ) -> str:
     if status == "off":
         return "off"
+    if status == "sick_leave":
+        return "sick leave"
     parts = []
     for location in locations:
         hours = location.get("hours")
@@ -233,8 +235,8 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
         raise ValueError(f"{worker['name']} is archived. Restore the worker before saving entries.")
     work_date = date.fromisoformat(str(raw.get("date") or raw.get("work_date") or ""))
     status = str(raw.get("status") or "worked").casefold()
-    if status not in {"worked", "off"}:
-        raise ValueError("Status must be worked or off.")
+    if status not in {"worked", "off", "sick_leave"}:
+        raise ValueError("Status must be worked, off, or sick leave.")
     locations = raw.get("locations") or []
     if status == "worked" and not locations:
         raise ValueError(f"Add a site for {worker['name']} on {work_date.isoformat()}.")
@@ -302,7 +304,7 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
     if total_source not in {"calculated", "manual"}:
         raise ValueError("Total hours source must be calculated or manual.")
     if status != "worked":
-        total = 0.0
+        total = 8.0 if status == "sick_leave" else 0.0
         total_source = "calculated"
     elif total_source == "calculated" and calculated_total is not None:
         # The backend repeats the source-of-truth calculation so a stale
@@ -314,10 +316,14 @@ def validate_row(raw: dict, worker_map: dict[str, dict], forced_worker: str = ""
         total = float(supplied_total)
     if total < 0 or total > 24:
         raise ValueError("Hours must be between 0 and 24.")
-    location_total = calculated_total if calculated_total is not None else total
+    location_total = (
+        calculated_total if calculated_total is not None
+        else 0.0 if status != "worked"
+        else total
+    )
     hours_difference = round(total - location_total, 2)
     override_reason = str(raw.get("override_reason") or "").strip()
-    expected_overtime = round(max(total - 8, 0), 2)
+    expected_overtime = round(max(total - 8, 0), 2) if status == "worked" else 0.0
     overtime_source = str(raw.get("overtime_source") or "calculated").casefold()
     if overtime_source not in {"calculated", "manual"}:
         raise ValueError("Overtime source must be calculated or manual.")

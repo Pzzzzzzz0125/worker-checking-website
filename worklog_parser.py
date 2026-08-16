@@ -34,6 +34,10 @@ MONEY_RE = re.compile(
 )
 HALF_DAY_RE = re.compile(r"\bhalf\s*day\b", re.IGNORECASE)
 OFF_RE = re.compile(r"^\s*(?:off\b.*|no\s*work\b.*|休息.*)\s*$", re.IGNORECASE)
+SICK_LEAVE_RE = re.compile(
+    r"^\s*(?:sick(?:\s+leave)?|paid\s+sick\s+leave|病假)\s*$",
+    re.IGNORECASE,
+)
 LEGACY_SEPARATOR_RE = re.compile(r"\s*(?:/|\+|,)\s*")
 
 
@@ -135,6 +139,16 @@ def parse_work_cell(value: object) -> ParseResult:
             confidence="high",
         )
 
+    if SICK_LEAVE_RE.match(text):
+        return ParseResult(
+            status="sick_leave",
+            total_hours=8,
+            locations=[],
+            extra_pay=0,
+            original_text=original,
+            confidence="high",
+        )
+
     if text.casefold() in {"out", "vacation", "holiday", "n/a", "na"}:
         return ParseResult(
             status="unknown",
@@ -224,6 +238,8 @@ def format_work_cell(
 ) -> str:
     if status == "off":
         return "off"
+    if status == "sick_leave":
+        return "sick leave"
     if status != "worked":
         return ""
 

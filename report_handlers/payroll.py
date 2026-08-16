@@ -48,12 +48,16 @@ class handler(BaseHTTPRequestHandler):
                 if not period_days:
                     continue
                 worked = [item for item in period_days if item["status"] == "worked"]
+                sick_leave = [item for item in period_days if item["status"] == "sick_leave"]
+                sick_hours = round(
+                    sum(float(item.get("total_hours") or 8) for item in sick_leave), 2,
+                )
                 breakdown = california_overtime(data["days"], worker_key, start, end, worker["worker_type"])
                 parts = list(breakdown.values())
-                regular = round(sum(item["regular_hours"] for item in parts), 2)
+                regular = round(sum(item["regular_hours"] for item in parts) + sick_hours, 2)
                 overtime = round(sum(item["overtime_hours"] for item in parts), 2)
                 doubletime = round(sum(item["doubletime_hours"] for item in parts), 2)
-                weighted = round(sum(item["weighted_hours"] for item in parts), 2)
+                weighted = round(sum(item["weighted_hours"] for item in parts) + sick_hours, 2)
                 extra = round(sum(item["extra_pay"] for item in worked), 2)
                 rate = float(worker["daily_rate"])
                 workers.append(
@@ -64,8 +68,10 @@ class handler(BaseHTTPRequestHandler):
                         "daily_rate": rate,
                         "recorded_days": len(period_days),
                         "worked_days": len(worked),
+                        "sick_leave_days": len(sick_leave),
+                        "sick_leave_hours": sick_hours,
                         "off_days": len([item for item in period_days if item["status"] == "off"]),
-                        "hours": round(sum(item["total_hours"] for item in worked), 2),
+                        "hours": round(sum(item["total_hours"] for item in worked) + sick_hours, 2),
                         "regular_hours": regular,
                         "overtime_hours": overtime,
                         "doubletime_hours": doubletime,
@@ -89,7 +95,10 @@ class handler(BaseHTTPRequestHandler):
                         "regular_hours": round(sum(item["regular_hours"] for item in workers), 2),
                         "weighted_hours": round(sum(item["weighted_hours"] for item in workers), 2),
                         "estimated_salary": round(sum(item["estimated_salary"] for item in workers), 2),
-                        "workers": len([item for item in workers if item["worked_days"]]),
+                        "workers": len([
+                            item for item in workers
+                            if item["worked_days"] or item["sick_leave_days"]
+                        ]),
                         "checked": len([item for item in workers if item["checked"]]),
                     },
                     "workers": workers,

@@ -139,6 +139,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
   const [weekStart, setWeekStart] = useState(() => monday(localISO()))
   const [rows, setRows] = useState<ScheduleRow[]>([])
   const [form, setForm] = useState<FormState>(() => emptyForm(localISO()))
+  const [workerSearch, setWorkerSearch] = useState("")
   const [planMode, setPlanMode] = useState<"single" | "multiple">("single")
   const [multipleMode, setMultipleMode] = useState<"range" | "dates">("range")
   const [selectedDates, setSelectedDates] = useState<string[]>([])
@@ -182,21 +183,35 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
     const blank = emptyForm(localISO())
     setForm(planMode === "multiple" ? { ...blank, schedule_date: "", schedule_end_date: "" } : blank)
     setSelectedDates([])
+    setWorkerSearch("")
     setRangeStep("start")
   }
-  const edit = (row: ScheduleRow) => setForm({
-    schedule_key: row.schedule_key,
-    schedule_date: row.schedule_date,
-    schedule_end_date: row.schedule_date,
-    worker_key: row.worker_key,
-    site: row.site,
-    cost_code_ids: row.cost_code_ids,
-    task: row.task,
-    start_time: row.start_time,
-    end_time: row.end_time,
-    notes: row.notes,
-    notification_recipient_ids: [],
-  })
+  const edit = (row: ScheduleRow) => {
+    setWorkerSearch(row.worker_name)
+    setForm({
+      schedule_key: row.schedule_key,
+      schedule_date: row.schedule_date,
+      schedule_end_date: row.schedule_date,
+      worker_key: row.worker_key,
+      site: row.site,
+      cost_code_ids: row.cost_code_ids,
+      task: row.task,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      notes: row.notes,
+      notification_recipient_ids: [],
+    })
+  }
+
+  const chooseWorker = (value: string) => {
+    setWorkerSearch(value)
+    const normalized = value.trim().toLowerCase()
+    const exact = workers.find(worker => worker.name.trim().toLowerCase() === normalized)
+    setForm(current => ({
+      ...current,
+      worker_key: exact ? exact.worker_key || String(exact.id) : "",
+    }))
+  }
 
   const editRow = (row: ScheduleRow) => {
     setPlanMode("single")
@@ -366,7 +381,7 @@ export function ScheduleView({ bootstrap }: { bootstrap: Bootstrap }) {
             <ScheduleCalendar mode={multipleMode} month={calendarMonth} onMonthChange={setCalendarMonth} rangeStart={form.schedule_date} rangeEnd={form.schedule_end_date} selectedDates={selectedDates} onRangeDate={selectRangeDate} onToggleDate={toggleDate} />
             <span className="text-xs text-muted-foreground">{formDateCount || 0} date{formDateCount === 1 ? "" : "s"} will be created. Maximum 31 dates.</span>
           </div>}
-          <label className="field-label">Worker<select className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm" value={form.worker_key} onChange={event => setField("worker_key", event.target.value)} required><option value="">Select worker…</option>{workers.map(worker => <option key={worker.worker_key || worker.id} value={worker.worker_key || String(worker.id)}>{worker.name}</option>)}</select></label>
+          <label className="field-label">Worker<Input list="schedule-workers" value={workerSearch} onChange={event => chooseWorker(event.target.value)} placeholder="Type to search workers…" autoComplete="off" required/><datalist id="schedule-workers">{workers.map(worker => <option key={worker.worker_key || worker.id} value={worker.name}/>)}</datalist>{workerSearch&&!form.worker_key&&<span className="mt-1 block text-xs text-amber-700">Choose an exact worker from the suggestions.</span>}</label>
           <label className="field-label">Site<Input list="locations" value={form.site} onChange={event => setField("site", event.target.value)} placeholder="Select or enter a Site" required /></label>
         </div>
         <div className="grid gap-3 rounded-xl border bg-slate-50 p-3">

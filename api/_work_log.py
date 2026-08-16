@@ -68,6 +68,8 @@ def format_normalized_entry(day: dict, locations: list[dict]) -> str:
     if status == "off":
         original = _safe_text(day.get("Original Text"))
         return original if original.casefold().startswith("off") else "off"
+    if status == "sick_leave":
+        return "sick leave"
     if status != "worked":
         original = _safe_text(day.get("Original Text"))
         return original or status

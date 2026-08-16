@@ -71,6 +71,28 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(result["days"], 1)
         self.assertEqual(base.deleted, [("Location Entries", "old-location")])
 
+    def test_sick_leave_is_eight_paid_hours_without_site_or_overtime(self):
+        base = FakeBase()
+        save_rows(
+            base,
+            [{
+                "worker_id": 7,
+                "date": "2026-07-03",
+                "status": "sick_leave",
+                "total_hours": 0,
+                "overtime_hours": 4,
+                "locations": [],
+            }],
+            self.worker_map,
+        )
+        day = base.saved["Work Days"][0]
+        self.assertEqual(day["Status"], "sick_leave")
+        self.assertEqual(day["Total Hours"], 8)
+        self.assertEqual(day["Overtime Hours"], 0)
+        self.assertEqual(day["Location Hours Sum"], 0)
+        self.assertEqual(day["Original Text"], "sick leave")
+        self.assertEqual(base.saved["Location Entries"], [])
+
     def test_location_ranges_drive_regular_and_overtime_hours(self):
         base = FakeBase()
         save_rows(
