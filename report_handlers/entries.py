@@ -534,6 +534,33 @@ def clear_days(base: LarkBase, targets: list[tuple[str, str]]) -> dict:
     }
 
 
+def build_copy_rows(
+    source_rows: list[dict], targets: list[str], target_dates: list[str], actor: str,
+) -> list[dict]:
+    """Build an explicit date mapping without truncating or cycling patterns."""
+    ordered_sources = sorted(
+        source_rows,
+        key=lambda row: date.fromisoformat(
+            str(row.get("date") or row.get("work_date") or "")
+        ),
+    )
+    if len(ordered_sources) > 1 and len(ordered_sources) != len(target_dates):
+        raise ValueError(
+            f"Source and target date counts must match ({len(ordered_sources)} source, "
+            f"{len(target_dates)} target). Only one source day may repeat across multiple dates."
+        )
+    return [
+        {
+            **(ordered_sources[0] if len(ordered_sources) == 1 else ordered_sources[index]),
+            "date": target_date,
+            "forced_worker": target,
+            "override_by": actor,
+        }
+        for target in targets
+        for index, target_date in enumerate(target_dates)
+    ]
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not session(self):
@@ -637,7 +664,9 @@ class handler(BaseHTTPRequestHandler):
                 return
             if action == "worker_days_copy":
                 source_rows = body.get("records") or []
-                targets = [str(int(value)) for value in body.get("target_worker_ids") or []]
+                targets = list(dict.fromkeys(
+                    str(int(value)) for value in body.get("target_worker_ids") or []
+                ))
                 if not source_rows or not targets:
                     raise ValueError("Choose days and at least one target worker.")
                 if any(target not in worker_map or not worker_map[target]["active"] for target in targets):
@@ -670,22 +699,52 @@ class handler(BaseHTTPRequestHandler):
                         "A Worker cannot be copied to the same Worker on the same date. "
                         "Choose a different target date."
                     )
-                rows = [
-                    {
-                        **source_rows[index % len(source_rows)],
-                        "date": target_date,
-                        "forced_worker": target,
-                        "override_by": actor,
-                    }
-                    for target in targets
-                    for index, target_date in enumerate(target_dates)
-                ]
-                result = save_rows(base, rows, worker_map)
+                rows = build_copy_rows(source_rows, targets, target_dates, actor)
+                existing_days, _ = load_range(base, min(target_dates), max(target_dates))
+                existing_keys = {
+                    text_value(field(record, "Work Day Key"))
+                    for record in existing_days
+                    if text_value(field(record, "Work Day Key"))
+                }
+                target_keys = {
+                    f"{row['forced_worker']}|{row['date']}"
+                    for row in rows
+                }
+                existing_target_keys = target_keys.intersection(existing_keys)
+                preview = {
+                    "target_records": len(target_keys),
+                    "empty_records": len(target_keys) - len(existing_target_keys),
+                    "existing_records": len(existing_target_keys),
+                }
+                if body.get("preview_only") is True:
+                    json_response(self, {
+                        "preview": True,
+                        **preview,
+                        "source_days": len(source_rows),
+                        "target_days": len(target_dates),
+                        "target_workers": [worker_map[target]["name"] for target in targets],
+                    })
+                    return
+                existing_mode = str(body.get("existing_mode") or "skip").strip().casefold()
+                if existing_mode not in {"skip", "replace"}:
+                    raise ValueError("Choose Skip existing or Replace existing.")
+                if existing_mode == "replace" and existing_target_keys and body.get("confirm_replace") is not True:
+                    raise ValueError("Confirm before replacing existing target records.")
+                rows_to_save = rows
+                if existing_mode == "skip":
+                    rows_to_save = [
+                        row for row in rows
+                        if f"{row['forced_worker']}|{row['date']}" not in existing_target_keys
+                    ]
+                result = save_rows(base, rows_to_save, worker_map)
                 json_response(
                     self,
                     {
                         "saved": True,
                         **result,
+                        **preview,
+                        "written_records": result.get("days", 0),
+                        "skipped_records": len(existing_target_keys) if existing_mode == "skip" else 0,
                         "days": len(target_dates),
                         "target_workers": [worker_map[target]["name"] for target in targets],
                         "target_dates": target_dates,

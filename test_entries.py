@@ -1,6 +1,6 @@
 import unittest
 
-from report_handlers.entries import clear_day, clear_days, joined_days, save_rows
+from report_handlers.entries import build_copy_rows, clear_day, clear_days, joined_days, save_rows
 
 
 def record(record_id, **fields):
@@ -38,6 +38,39 @@ class FakeBase:
 
 class EntryTests(unittest.TestCase):
     worker_map = {"7": {"id": 7, "key": "7", "name": "Ana", "active": True}}
+
+    def test_copy_maps_equal_date_counts_chronologically(self):
+        rows = build_copy_rows(
+            [
+                {"date": "2026-08-02", "notes": "B"},
+                {"date": "2026-08-01", "notes": "A"},
+            ],
+            ["8"],
+            ["2026-08-10", "2026-08-11"],
+            "Manager",
+        )
+        self.assertEqual(
+            [(row["date"], row["notes"]) for row in rows],
+            [("2026-08-10", "A"), ("2026-08-11", "B")],
+        )
+
+    def test_copy_allows_one_source_day_to_repeat(self):
+        rows = build_copy_rows(
+            [{"date": "2026-08-01", "notes": "A"}],
+            ["8"],
+            ["2026-08-10", "2026-08-11", "2026-08-12"],
+            "Manager",
+        )
+        self.assertEqual([row["notes"] for row in rows], ["A", "A", "A"])
+
+    def test_copy_blocks_unequal_multiple_source_and_target_counts(self):
+        with self.assertRaisesRegex(ValueError, "counts must match"):
+            build_copy_rows(
+                [{"date": "2026-08-01"}, {"date": "2026-08-02"}, {"date": "2026-08-03"}],
+                ["8"],
+                ["2026-08-10", "2026-08-11"],
+                "Manager",
+            )
 
     def test_multiple_cost_centers_preserve_location_total_after_rounding(self):
         base = FakeBase()
